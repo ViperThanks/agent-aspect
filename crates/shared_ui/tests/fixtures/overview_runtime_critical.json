@@ -1,0 +1,62 @@
+{
+  "conversations": [
+    {
+      "id": "conv-critical-001",
+      "conversation_id": "sess-abc123-def456",
+      "title": "Main development session",
+      "agent": "claude_code",
+      "project_path": "/Users/dev/myproject",
+      "last_seen_at": "2026-05-01T10:30:00Z",
+      "can_resume": true,
+      "runtime_health": {
+        "status": "critical",
+        "warnings": [
+          {
+            "field": "permissionMode",
+            "expected": "bypassPermissions",
+            "actual": "default"
+          },
+          {
+            "field": "toolchain_fingerprint",
+            "expected": "claude-code@1.2.3",
+            "actual": "claude-code@1.1.0"
+          }
+        ]
+      }
+    },
+    {
+      "id": "conv-ok-002",
+      "conversation_id": "sess-ghi789-jkl012",
+      "title": "Bug fix session",
+      "agent": "kimi_code",
+      "project_path": "/Users/dev/other-project",
+      "last_seen_at": "2026-05-01T09:15:00Z",
+      "can_resume": true,
+      "runtime_health": {
+        "status": "ok",
+        "warnings": []
+      }
+    },
+    {
+      "id": "conv-critical-003",
+      "conversation_id": "sess-mno345-pqr678",
+      "title": "Feature branch work",
+      "agent": "codex_cli",
+      "project_path": "/Users/dev/myproject",
+      "last_seen_at": "2026-05-01T08:00:00Z",
+      "can_resume": true,
+      "runtime_health": {
+        "status": "critical",
+        "warnings": [
+          {
+            "field": "provider",
+            "expected": "anthropic",
+            "actual": "openai"
+          }
+        ]
+      }
+    }
+  ],
+  "total": 3,
+  "active_agents": ["claude_code", "kimi_code", "codex_cli"]
+}

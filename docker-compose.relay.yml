@@ -1,0 +1,28 @@
+# Docker Compose for checkpoint-relay only.
+#
+# The daemon, bridge, hook-cli, and CLI run natively on your Mac.
+# This compose file is for deploying the relay on a VPS.
+#
+# Usage:
+#   cp .env.example .env
+#   # Edit .env with your values
+#   docker compose -f docker-compose.relay.yml up -d
+
+services:
+  relay:
+    build:
+      context: .
+      dockerfile: Dockerfile.relay
+    container_name: checkpoint-relay
+    restart: unless-stopped
+    ports:
+      - "${RELAY_LISTEN_PORT:-8080}:8080"
+    environment:
+      - RELAY_LISTEN_ADDR=0.0.0.0:8080
+      - RELAY_SECRET=${RELAY_SECRET:-}
+      - RELAY_SETUP_TOKEN=${RELAY_SETUP_TOKEN:-}
+    volumes:
+      - relay-data:/root/.checkpoint-relay
+
+volumes:
+  relay-data:

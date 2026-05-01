@@ -1,0 +1,255 @@
+/* design_tokens.css — Apple-inspired design tokens for Checkpoint
+ *
+ * 设计方向：工具型控制台，不是营销页。
+ * 高级、克制、信息清楚、手机/桌面一致。
+ *
+ * 参考：Apple HIG Dark Mode + SF Pro typography scale
+ * 适配：bridge（桌面）+ relay（手机）统一视觉语言
+ */
+
+:root {
+  /* ===== Backgrounds ===== */
+  --bg:           #000000;
+  --surface:      #1c1c1e;
+  --surface2:     #2c2c2e;
+  --surface3:     #3a3a3c;
+  --surface-glass: rgba(28, 28, 30, 0.72);
+
+  /* ===== Labels ===== */
+  --text:         rgba(255, 255, 255, 1.0);
+  --text-secondary: rgba(255, 255, 255, 0.6);
+  --text-tertiary:  rgba(255, 255, 255, 0.3);
+  --dim:          rgba(255, 255, 255, 0.6);
+  --dimmer:       rgba(255, 255, 255, 0.3);
+
+  /* ===== Separators ===== */
+  --border:       rgba(84, 84, 88, 0.65);
+  --border-hover: rgba(84, 84, 88, 0.9);
+  --separator-opaque: #38383a;
+
+  /* ===== System Colors ===== */
+  --accent:       #0a84ff;
+  --accent-hover: #409cff;
+  --accent-bg:    rgba(10, 132, 255, 0.12);
+  --accent-glow:  rgba(10, 132, 255, 0.20);
+
+  --green:        #30d158;
+  --green-bg:     rgba(48, 209, 88, 0.12);
+
+  --red:          #ff453a;
+  --red-bg:       rgba(255, 69, 58, 0.12);
+  --red-text:     #ff6961;
+
+  --yellow:       #ffd60a;
+  --yellow-bg:    rgba(255, 214, 10, 0.12);
+
+  --orange:       #ff9f0a;
+  --orange-bg:    rgba(255, 159, 10, 0.12);
+
+  --blue:         #64d2ff;
+  --purple:       #bf5af2;
+  --indigo:       #5e5ce6;
+  --teal:         #64d2ff;
+  --pink:         #ff375f;
+
+  /* ===== Typography ===== */
+  --font-system:  -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Helvetica Neue', sans-serif;
+  --font-mono:    'SF Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+
+  /* SF Pro type scale */
+  --text-large-title: 34px;
+  --text-title1:      28px;
+  --text-title2:      22px;
+  --text-title3:      20px;
+  --text-headline:    17px;
+  --text-body:        17px;
+  --text-callout:     16px;
+  --text-subhead:     15px;
+  --text-footnote:    13px;
+  --text-caption1:    12px;
+  --text-caption2:    11px;
+
+  /* ===== Spacing (8pt grid) ===== */
+  --space-2:   2px;
+  --space-4:   4px;
+  --space-8:   8px;
+  --space-12:  12px;
+  --space-16:  16px;
+  --space-20:  20px;
+  --space-24:  24px;
+  --space-32:  32px;
+  --space-44:  44px;  /* minimum touch target */
+
+  /* ===== Border Radius ===== */
+  --radius-sm:   8px;
+  --radius-md:   12px;
+  --radius-lg:   16px;
+  --radius-xl:   20px;
+  --radius-full: 100px;
+
+  /* ===== Elevation ===== */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.12), 0 1px 4px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.16), 0 2px 8px rgba(0, 0, 0, 0.08);
+  --shadow-glass: 0 8px 32px rgba(0, 0, 0, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+
+  /* ===== Blur / Glass ===== */
+  --blur-sm:   8px;
+  --blur-md:   20px;
+  --blur-lg:   40px;
+  --blur-xl:   80px;
+
+  /* ===== Motion ===== */
+  --ease-default: cubic-bezier(0.25, 0.1, 0.25, 1.0);
+  --ease-spring:  cubic-bezier(0.34, 1.56, 0.64, 1.0);
+  --ease-smooth:  cubic-bezier(0.4, 0, 0.2, 1.0);
+  --duration-fast:   150ms;
+  --duration-normal: 250ms;
+  --duration-slow:   400ms;
+
+  /* ===== Status Colors ===== */
+  --status-online:   #30d158;
+  --status-offline:  #ff453a;
+  --status-warning:  #ffd60a;
+  --status-unknown:  rgba(255, 255, 255, 0.3);
+  --status-loading:  #ff9f0a;
+}
+
+/* ===== Light Mode ===== */
+[data-theme="light"] {
+  /* Soft graphite light mode: no pure white canvas, shared by bridge + relay. */
+  --bg:           #eef1f5;
+  --surface:      #e2e6ee;
+  --surface2:     #d5dbe6;
+  --surface3:     #c6cedb;
+  --surface-glass: rgba(226, 230, 238, 0.86);
+
+  --text:         rgba(18, 22, 32, 0.94);
+  --text-secondary: rgba(18, 22, 32, 0.66);
+  --text-tertiary:  rgba(18, 22, 32, 0.42);
+  --dim:          rgba(18, 22, 32, 0.58);
+  --dimmer:       rgba(18, 22, 32, 0.36);
+
+  --border:       rgba(31, 38, 54, 0.16);
+  --border-hover: rgba(31, 38, 54, 0.30);
+  --separator-opaque: #c4ccd8;
+
+  --accent:       #0a6ff2;
+  --accent-hover: #005bd1;
+  --accent-bg:    rgba(10, 111, 242, 0.12);
+  --accent-glow:  rgba(10, 111, 242, 0.18);
+
+  --green:        #248a3d;
+  --green-bg:     rgba(36, 138, 61, 0.12);
+
+  --red:          #d92d3a;
+  --red-bg:       rgba(217, 45, 58, 0.11);
+  --red-text:     #b4232f;
+
+  --yellow:       #9a6a00;
+  --yellow-bg:    rgba(154, 106, 0, 0.12);
+
+  --orange:       #c76a00;
+  --orange-bg:    rgba(199, 106, 0, 0.11);
+
+  --blue:         #0a6ff2;
+
+  --shadow-sm: 0 1px 2px rgba(24, 31, 48, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.42);
+  --shadow-md: 0 6px 18px rgba(24, 31, 48, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.50);
+  --shadow-lg: 0 16px 40px rgba(24, 31, 48, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.56);
+  --shadow-glass: 0 14px 40px rgba(24, 31, 48, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.60);
+
+  --status-online:   #248a3d;
+  --status-offline:  #d92d3a;
+  --status-warning:  #9a6a00;
+  --status-unknown:  rgba(18, 22, 32, 0.36);
+  --status-loading:  #c76a00;
+}
+
+/* ===== Activity Segment Cards ===== */
+/* Bridge + Relay 共享的活动折叠样式。 */
+
+.act-turn { margin: var(--space-8) 0; }
+
+.act-turn-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-4) var(--space-8);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  user-select: none;
+  font-size: var(--text-footnote);
+  color: var(--text-secondary);
+}
+.act-turn-bar:hover { background: var(--surface2); }
+
+.act-turn.act-running .act-turn-bar { cursor: default; }
+.act-turn.act-running .act-turn-bar:hover { background: var(--surface); }
+
+.act-turn-label { font-weight: 500; color: var(--dim); }
+.act-turn-tools { font-size: var(--text-caption1); color: var(--text-tertiary); margin-left: auto; }
+.act-turn-chevron { font-size: 10px; color: var(--text-tertiary); }
+
+.act-pulse {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--status-loading);
+  animation: act-pulse-anim 1.4s ease-in-out infinite;
+}
+@keyframes act-pulse-anim {
+  0%, 100% { opacity: 0.4; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+.act-turn-body { padding-left: var(--space-12); }
+
+.act-card {
+  margin: var(--space-4) 0;
+  padding: var(--space-4) var(--space-8);
+  border-radius: var(--radius-sm);
+  background: var(--surface2);
+  font-size: var(--text-footnote);
+}
+.act-explore { border-left: 3px solid var(--accent); }
+.act-edit    { border-left: 3px solid var(--green); }
+.act-tool    { border-left: 3px solid var(--text-tertiary); }
+
+.act-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  cursor: pointer;
+  user-select: none;
+  color: var(--text-secondary);
+}
+.act-summary:hover { color: var(--text); }
+.act-summary-text { flex: 1; }
+.act-chevron { font-size: 10px; color: var(--text-tertiary); transition: transform var(--duration-fast) var(--ease-default); }
+
+.act-detail { margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--border); }
+
+.act-item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+  padding: 2px 0;
+  font-size: var(--text-caption1);
+  color: var(--text-tertiary);
+}
+.act-item-name {
+  font-weight: 600;
+  color: var(--dim);
+  min-width: 36px;
+}
+.act-item-preview {
+  font-family: var(--font-mono);
+  font-size: var(--text-caption2);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}

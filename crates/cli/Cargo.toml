@@ -1,0 +1,20 @@
+[package]
+name = "checkpoint-cli"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[lib]
+name = "checkpoint_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "checkpoint"
+path = "src/main.rs"
+
+[dependencies]
+checkpoint-core = { path = "../core" }
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+libc = "0.2"
+chrono = "0.4"

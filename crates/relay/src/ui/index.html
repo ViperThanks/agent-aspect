@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Checkpoint Relay</title>
+<style>
+/*__CSS__*/
+</style>
+</head>
+<body>
+
+<!-- Token form -->
+<div id="token-form" class="token-form">
+  <h2>Checkpoint</h2>
+  <p>输入 Pairing Token 连接 Mac</p>
+  <input id="token-input" placeholder="cp_rt1.xxx.xxx" autocomplete="off" autocapitalize="off" spellcheck="false">
+  <button onclick="saveToken()">连接</button>
+  <div id="token-error" class="token-error"></div>
+</div>
+
+<!-- App shell -->
+<div id="app" class="hidden">
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <div id="status-dot" class="dot loading"></div>
+      <span id="header-title" class="header-title">Checkpoint</span>
+    </div>
+    <div class="header-right">
+      <button class="btn-theme" onclick="toggleTheme()" title="切换主题"><span class="theme-toggle-icon">🌙</span></button>
+      <button class="btn-logout" onclick="logout()">退出</button>
+    </div>
+  </div>
+
+  <!-- Tab content -->
+  <div id="page-home" class="content"></div>
+  <div id="page-convos" class="content hidden"></div>
+  <div id="page-run" class="content hidden"></div>
+  <div id="page-settings" class="content hidden"></div>
+
+  <!-- Conversation detail (overlay) -->
+  <div id="page-conv-detail" class="content hidden"></div>
+
+  <!-- Bottom tabs -->
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('home')" id="tab-home">
+      <span class="tab-icon">&#9750;</span><span>首页</span>
+    </div>
+    <div class="tab" onclick="switchTab('convos')" id="tab-convos">
+      <span class="tab-icon">&#9993;</span><span>会话</span>
+    </div>
+    <div class="tab" onclick="switchTab('run')" id="tab-run">
+      <span class="tab-icon">&#9654;</span><span>执行</span>
+    </div>
+    <div class="tab" onclick="switchTab('settings')" id="tab-settings">
+      <span class="tab-icon">&#9881;</span><span>设置</span>
+    </div>
+  </div>
+</div>
+
+<script>
+/*__JS__*/
+</script>
+</body>
+</html>

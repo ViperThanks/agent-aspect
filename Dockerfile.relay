@@ -1,0 +1,18 @@
+# Build checkpoint-relay from source.
+# Only the relay binary is built; other workspace members are copied for
+# workspace resolution but not compiled.
+
+FROM rust:1.87-bookworm AS builder
+
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+COPY crates/ crates/
+
+# Build only the relay binary
+RUN cargo build --release --bin checkpoint-relay
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/target/release/checkpoint-relay /usr/local/bin/checkpoint-relay
+EXPOSE 8080
+CMD ["checkpoint-relay"]

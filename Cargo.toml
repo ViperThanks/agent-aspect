@@ -1,0 +1,13 @@
+[workspace]
+members = [
+    "crates/core",
+    "crates/daemon",
+    "crates/hook-cli",
+    "crates/cli",
+    "crates/bridge",
+    "crates/relay",
+]
+resolver = "2"
+
+[workspace.package]
+license = "Apache-2.0"

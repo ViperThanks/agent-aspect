@@ -1,0 +1,53 @@
+# OS / editor state
+.DS_Store
+._*
+.idea/
+.vscode/
+*.code-workspace
+*.iml
+*.iws
+
+# Local agent / workspace state
+.*
+!.env.example
+!.gitignore
+.git-private-backup-*/
+tasks/
+notes/
+
+# Keep public markdown only
+*.md
+!README.md
+!README.zh-CN.md
+!docs/config.md
+!docs/relay.md
+!docs/security.md
+!docs/open-source-scope.md
+
+# Secrets / runtime data
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.log
+*.sqlite
+*.sqlite3
+*.db
+
+# Build output / dependency caches
+target/
+node_modules/
+dist/
+.pnpm-store/
+__pycache__/
+*.pyc
+.venv/
+venv/
+build/
+
+# macOS / Swift / Xcode local output
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+DerivedData/
+Pods/
