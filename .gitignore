@@ -20,6 +20,7 @@ notes/
 *.md
 !README.md
 !README.zh-CN.md
+!RELEASE_NOTES.md
 !CONTRIBUTING.md
 !docs/config.md
 !docs/relay.md
