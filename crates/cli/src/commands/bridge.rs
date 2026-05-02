@@ -1,4 +1,4 @@
-//! `checkpoint bridge` — 管理 Bridge HTTP 服务器和 Relay 远程访问。
+//! `agent-aspect bridge` — 管理 Bridge HTTP 服务器和 Relay 远程访问。
 //!
 //! Bridge 是本地 HTTP 控制面（默认 127.0.0.1:7676），提供 Web UI 和 REST API。
 //! 子命令涵盖进程生命周期（start/stop/restart/status）、LaunchDaemon 集成
@@ -15,9 +15,9 @@ use checkpoint_core::{config::Config, paths, process_guard};
 use super::helpers::{bin_dir, run_launchctl};
 
 /// Bridge 的 launchd 服务标识。
-pub const BRIDGE_PLIST_LABEL: &str = "com.checkpoint.bridge";
+pub const BRIDGE_PLIST_LABEL: &str = "com.agent-aspect.bridge";
 
-/// Bridge 进程运行时状态，从 `~/.checkpoint/bridge.state.json` 反序列化。
+/// Bridge 进程运行时状态，从 `~/.agent-aspect/bridge.state.json` 反序列化。
 #[derive(serde::Deserialize)]
 pub struct BridgeState {
     pub pid: u32,
@@ -53,35 +53,35 @@ pub fn cmd_bridge(sub: Option<&str>, args: &[String]) {
         Some("help") | Some("--help") | Some("-h") | None => bridge_help(),
         Some(other) => {
             eprintln!("unknown bridge command: {other}");
-            eprintln!("run 'checkpoint bridge help' for usage");
+            eprintln!("run 'agent-aspect bridge help' for usage");
             std::process::exit(1);
         }
     }
 }
 
 fn bridge_help() {
-    println!("checkpoint bridge — manage local bridge and relay access");
+    println!("agent-aspect bridge — manage local bridge and relay access");
     println!();
     println!("Usage:");
-    println!("  checkpoint bridge start [--relay-url <wss-url>]");
-    println!("  checkpoint bridge restart [--relay-url <wss-url>]");
-    println!("  checkpoint bridge stop");
-    println!("  checkpoint bridge status");
-    println!("  checkpoint bridge token [--bridge|--relay-client|--relay-mac]");
-    println!("  checkpoint bridge relay <status|set-url|unset-url|token|help>");
-    println!("  checkpoint bridge install [--keep-awake]");
-    println!("  checkpoint bridge uninstall");
-    println!("  checkpoint bridge pair|expose|unexpose");
+    println!("  agent-aspect bridge start [--relay-url <wss-url>]");
+    println!("  agent-aspect bridge restart [--relay-url <wss-url>]");
+    println!("  agent-aspect bridge stop");
+    println!("  agent-aspect bridge status");
+    println!("  agent-aspect bridge token [--bridge|--relay-client|--relay-mac]");
+    println!("  agent-aspect bridge relay <status|set-url|unset-url|token|help>");
+    println!("  agent-aspect bridge install [--keep-awake]");
+    println!("  agent-aspect bridge uninstall");
+    println!("  agent-aspect bridge pair|expose|unexpose");
     println!();
     println!("Relay examples:");
-    println!("  checkpoint bridge start --relay-url wss://relay.example.com/ws");
-    println!("  checkpoint bridge token --relay-client");
-    println!("  checkpoint bridge relay status");
-    println!("  checkpoint bridge relay set-url wss://relay.example.com/ws");
-    println!("  checkpoint bridge relay token --client");
+    println!("  agent-aspect bridge start --relay-url wss://relay.example.com/ws");
+    println!("  agent-aspect bridge token --relay-client");
+    println!("  agent-aspect bridge relay status");
+    println!("  agent-aspect bridge relay set-url wss://relay.example.com/ws");
+    println!("  agent-aspect bridge relay token --client");
     println!();
     println!("Notes:");
-    println!("  Relay URLs are stored in ~/.checkpoint/config.toml.");
+    println!("  Relay URLs are stored in ~/.agent-aspect/config.toml.");
     println!("  Relay tokens are stored locally and are never checked into the repo.");
     println!(
         "  --keep-awake keeps Mac reachable while locked by preventing system sleep on AC power."
@@ -112,14 +112,14 @@ fn apply_start_options(args: &[String]) {
             }
             other => {
                 eprintln!("unknown bridge option: {other}");
-                eprintln!("run 'checkpoint bridge help' for usage");
+                eprintln!("run 'agent-aspect bridge help' for usage");
                 std::process::exit(1);
             }
         }
     }
 }
 
-/// 检查 pid 是否存活且确实是 checkpoint-bridge 进程。
+/// 检查 pid 是否存活且确实是 agent-aspect-bridge 进程。
 ///
 /// 返回 `(alive, verified)`:
 /// - `alive=true` — pid 对应的进程存在
@@ -171,7 +171,7 @@ pub fn verify_bridge_pid(pid: u32, expected_exe: &str) -> (bool, bool) {
         .file_name()
         .unwrap_or_default()
         .to_string_lossy();
-    // ps -o comm= may return a relative path (e.g. "target/debug/checkpoint-bridge")
+    // ps -o comm= may return a relative path (e.g. "target/debug/agent-aspect-bridge")
     let comm_name = std::path::Path::new(&comm)
         .file_name()
         .unwrap_or_default()
@@ -218,11 +218,11 @@ pub fn load_and_verify_state() -> Option<(BridgeState, bool)> {
 ///
 /// 流程：
 /// 1. 先尝试停掉旧进程（可能残留）
-/// 2. 定位 checkpoint-bridge 二进制
+/// 2. 定位 agent-aspect-bridge 二进制
 /// 3. spawn 后等待 500ms 让 bridge 写 state/port 文件
 /// 4. 验证进程仍然存活
 fn bridge_start() {
-    match process_guard::stop_existing(&paths::bridge_state_path(), "checkpoint-bridge") {
+    match process_guard::stop_existing(&paths::bridge_state_path(), "agent-aspect-bridge") {
         process_guard::StopResult::Stopped(pid) => {
             println!("replaced previous bridge (pid {pid})");
             std::fs::remove_file(paths::bridge_port_path()).ok();
@@ -241,10 +241,15 @@ fn bridge_start() {
         eprintln!("FAIL: cannot determine binary directory");
         std::process::exit(1);
     };
-    let bridge_bin = dir.join("checkpoint-bridge");
+    let bridge_bin = dir.join("agent-aspect-bridge");
+    let bridge_bin = if bridge_bin.exists() {
+        bridge_bin
+    } else {
+        dir.join("checkpoint-bridge")
+    };
     if !bridge_bin.exists() {
         eprintln!(
-            "FAIL: checkpoint-bridge not found at {}",
+            "FAIL: agent-aspect-bridge not found at {}",
             bridge_bin.display()
         );
         std::process::exit(1);
@@ -259,7 +264,7 @@ fn bridge_start() {
     let child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("FAIL: spawn checkpoint-bridge: {e}");
+            eprintln!("FAIL: spawn agent-aspect-bridge: {e}");
             std::process::exit(1);
         }
     };
@@ -411,7 +416,7 @@ fn bridge_token(args: &[String]) {
         [flag] if flag == "--relay-client" => TokenKind::RelayClient,
         [flag] if flag == "--relay-mac" => TokenKind::RelayMac,
         [flag] if flag == "--help" || flag == "-h" => {
-            println!("Usage: checkpoint bridge token [--bridge|--relay-client|--relay-mac]");
+            println!("Usage: agent-aspect bridge token [--bridge|--relay-client|--relay-mac]");
             println!();
             println!("  --bridge        Print local bridge bearer token (default)");
             println!("  --relay-client  Print phone-facing relay client token");
@@ -419,7 +424,7 @@ fn bridge_token(args: &[String]) {
             return;
         }
         _ => {
-            eprintln!("usage: checkpoint bridge token [--bridge|--relay-client|--relay-mac]");
+            eprintln!("usage: agent-aspect bridge token [--bridge|--relay-client|--relay-mac]");
             std::process::exit(1);
         }
     };
@@ -508,13 +513,13 @@ fn unset_relay_url() {
     println!("relay_url unset");
 }
 
-/// Relay 子命令入口（`checkpoint bridge relay <status|set-url|unset-url|token>`）。
+/// Relay 子命令入口（`agent-aspect bridge relay <status|set-url|unset-url|token>`）。
 fn bridge_relay(args: &[String]) {
     match args.first().map(|s| s.as_str()) {
         Some("status") | None => bridge_relay_status(),
         Some("set-url") => {
             let Some(url) = args.get(1) else {
-                eprintln!("usage: checkpoint bridge relay set-url <ws-url>");
+                eprintln!("usage: agent-aspect bridge relay set-url <ws-url>");
                 std::process::exit(1);
             };
             set_relay_url(url);
@@ -524,24 +529,24 @@ fn bridge_relay(args: &[String]) {
         Some("help") | Some("--help") | Some("-h") => bridge_relay_help(),
         Some(other) => {
             eprintln!("unknown relay command: {other}");
-            eprintln!("run 'checkpoint bridge relay help' for usage");
+            eprintln!("run 'agent-aspect bridge relay help' for usage");
             std::process::exit(1);
         }
     }
 }
 
 fn bridge_relay_help() {
-    println!("checkpoint bridge relay — manage relay configuration");
+    println!("agent-aspect bridge relay — manage relay configuration");
     println!();
     println!("Usage:");
-    println!("  checkpoint bridge relay status");
-    println!("  checkpoint bridge relay set-url <ws-url>");
-    println!("  checkpoint bridge relay unset-url");
-    println!("  checkpoint bridge relay token [--client|--mac]");
+    println!("  agent-aspect bridge relay status");
+    println!("  agent-aspect bridge relay set-url <ws-url>");
+    println!("  agent-aspect bridge relay unset-url");
+    println!("  agent-aspect bridge relay token [--client|--mac]");
     println!();
     println!("Examples:");
-    println!("  checkpoint bridge relay set-url wss://relay.example.com/ws");
-    println!("  checkpoint bridge relay token --client");
+    println!("  agent-aspect bridge relay set-url wss://relay.example.com/ws");
+    println!("  agent-aspect bridge relay token --client");
 }
 
 /// 显示 relay 配置状态（URL、token 路径、bridge 运行状态）。
@@ -579,14 +584,14 @@ fn bridge_relay_token(args: &[String]) {
         [flag] if flag == "--client" || flag == "--relay-client" => TokenKind::RelayClient,
         [flag] if flag == "--mac" || flag == "--relay-mac" => TokenKind::RelayMac,
         [flag] if flag == "--help" || flag == "-h" => {
-            println!("Usage: checkpoint bridge relay token [--client|--mac]");
+            println!("Usage: agent-aspect bridge relay token [--client|--mac]");
             println!();
             println!("  --client  Print phone-facing relay token (default)");
             println!("  --mac     Print Mac registration token");
             return;
         }
         _ => {
-            eprintln!("usage: checkpoint bridge relay token [--client|--mac]");
+            eprintln!("usage: agent-aspect bridge relay token [--client|--mac]");
             std::process::exit(1);
         }
     };
@@ -599,7 +604,7 @@ fn bridge_restart() {
     bridge_start();
 }
 
-/// 从 `~/.checkpoint/bridge.port` 读取实际监听端口号。
+/// 从 `~/.agent-aspect/bridge.port` 读取实际监听端口号。
 /// bridge 启动后将绑定端口写入此文件。
 fn read_bridge_port() -> Option<u16> {
     let port_path = paths::bridge_port_path();
@@ -625,10 +630,15 @@ fn bridge_install(args: &[String]) {
         eprintln!("FAIL: cannot determine binary directory");
         std::process::exit(1);
     };
-    let bridge_bin = dir.join("checkpoint-bridge");
+    let bridge_bin = dir.join("agent-aspect-bridge");
+    let bridge_bin = if bridge_bin.exists() {
+        bridge_bin
+    } else {
+        dir.join("checkpoint-bridge")
+    };
     if !bridge_bin.exists() {
         eprintln!(
-            "FAIL: checkpoint-bridge not found at {}",
+            "FAIL: agent-aspect-bridge not found at {}",
             bridge_bin.display()
         );
         std::process::exit(1);
@@ -640,8 +650,8 @@ fn bridge_install(args: &[String]) {
     }
     std::fs::create_dir_all(paths::checkpoint_dir()).ok();
 
-    let log_stdout = paths::checkpoint_dir().join("checkpoint-bridge.stdout.log");
-    let log_stderr = paths::checkpoint_dir().join("checkpoint-bridge.stderr.log");
+    let log_stdout = paths::checkpoint_dir().join("agent-aspect-bridge.stdout.log");
+    let log_stderr = paths::checkpoint_dir().join("agent-aspect-bridge.stderr.log");
 
     let program_arguments = if keep_awake {
         format!(
@@ -716,14 +726,14 @@ fn bridge_install(args: &[String]) {
     }
 }
 
-/// 解析 `checkpoint bridge install` 的安装选项。
+/// 解析 `agent-aspect bridge install` 的安装选项。
 fn parse_install_options(args: &[String]) -> bool {
     let mut keep_awake = false;
     for arg in args {
         match arg.as_str() {
             "--keep-awake" => keep_awake = true,
             "--help" | "-h" => {
-                println!("Usage: checkpoint bridge install [--keep-awake]");
+                println!("Usage: agent-aspect bridge install [--keep-awake]");
                 println!();
                 println!(
                     "  --keep-awake  Prevent system sleep on AC power while bridge is running"
@@ -732,7 +742,7 @@ fn parse_install_options(args: &[String]) -> bool {
             }
             other => {
                 eprintln!("unknown bridge install option: {other}");
-                eprintln!("usage: checkpoint bridge install [--keep-awake]");
+                eprintln!("usage: agent-aspect bridge install [--keep-awake]");
                 std::process::exit(1);
             }
         }
@@ -816,7 +826,7 @@ fn bridge_pair() {
     let (state, _) = match load_and_verify_state() {
         Some(s) => s,
         None => {
-            eprintln!("Bridge is not running. Start it first: checkpoint bridge start");
+            eprintln!("Bridge is not running. Start it first: agent-aspect bridge start");
             std::process::exit(1);
         }
     };
@@ -869,13 +879,13 @@ fn bridge_pair() {
 
     println!();
     println!("Token hint:  {token_hint}...");
-    println!("Full token:  checkpoint bridge token");
+    println!("Full token:  agent-aspect bridge token");
     println!("Token file:  {}", token_path.display());
 
     if !config.bridge_lan_enabled {
         println!();
         println!("Note: Bridge is not exposed to LAN.");
-        println!("      Run 'checkpoint bridge expose' to enable phone access.");
+        println!("      Run 'agent-aspect bridge expose' to enable phone access.");
     }
 }
 

@@ -25,7 +25,11 @@ fn main() {
     // 1. 加载配置：环境变量优先于 config.toml
     let config = Config::load_or_create();
     let config_addr = config.bridge_addr.clone();
-    let addr = std::env::var("CHECKPOINT_BRIDGE_ADDR").unwrap_or_else(|_| config_addr);
+    let addr = checkpoint_core::env_compat::env_var_or(
+        "AGENT_ASPECT_BRIDGE_ADDR",
+        "CHECKPOINT_BRIDGE_ADDR",
+        config_addr,
+    );
 
     // 2. 加载或生成 Bearer token（首次启动时原子创建文件）
     let token = auth::load_or_create_token();
@@ -33,9 +37,9 @@ fn main() {
     // 3. 单例守护：杀掉上一个实例再绑定端口，避免端口冲突
     let state_path = paths::bridge_state_path();
     if let Some(old_pid) =
-        checkpoint_core::process_guard::kill_existing(&state_path, "checkpoint-bridge")
+        checkpoint_core::process_guard::kill_existing(&state_path, "agent-aspect-bridge")
     {
-        eprintln!("checkpoint-bridge: replaced previous instance (pid {old_pid})");
+        eprintln!("agent-aspect-bridge: replaced previous instance (pid {old_pid})");
     }
 
     // 4. 初始化共享状态
@@ -44,14 +48,14 @@ fn main() {
     let resolver = ProviderResolver::from_config(&config, &registry);
     let ctx = AppContext::new(&paths::audit_db_path(), resolver.clone(), registry.clone())
         .unwrap_or_else(|e| {
-            eprintln!("checkpoint-bridge: {e}");
+            eprintln!("agent-aspect-bridge: {e}");
             std::process::exit(1);
         });
 
     let agent_prompt_timeout_secs = config.agent_prompt_timeout_secs.max(600);
     if agent_prompt_timeout_secs != config.agent_prompt_timeout_secs {
         eprintln!(
-            "checkpoint-bridge: agent_prompt_timeout_secs={} too low, using minimum {}s",
+            "agent-aspect-bridge: agent_prompt_timeout_secs={} too low, using minimum {}s",
             config.agent_prompt_timeout_secs, agent_prompt_timeout_secs
         );
     }
@@ -89,7 +93,7 @@ fn main() {
 
     // 6. 绑定端口
     let server = tiny_http::Server::http(&addr).unwrap_or_else(|e| {
-        eprintln!("checkpoint-bridge: bind {addr} failed: {e}");
+        eprintln!("agent-aspect-bridge: bind {addr} failed: {e}");
         std::process::exit(1);
     });
 
@@ -112,14 +116,15 @@ fn main() {
     });
     std::fs::write(&state_path, state.to_string()).ok();
 
-    eprintln!("checkpoint-bridge: listening on {addr}");
+    eprintln!("agent-aspect-bridge: listening on {addr}");
     eprintln!(
-        "checkpoint-bridge: token at {}",
+        "agent-aspect-bridge: token at {}",
         paths::bridge_token_path().display()
     );
 
     // 8. 可选启动 relay 客户端（配置了 relay_url 时才连接）
-    let relay_url_env = std::env::var("CHECKPOINT_RELAY_URL").ok();
+    let relay_url_env =
+        checkpoint_core::env_compat::env_var("AGENT_ASPECT_RELAY_URL", "CHECKPOINT_RELAY_URL");
     let relay_url = relay_url_env
         .as_deref()
         .or(config.relay_url.as_deref())
@@ -137,12 +142,12 @@ fn main() {
                     bridge_port: actual_port_for_relay,
                 });
                 eprintln!(
-                    "checkpoint-bridge: relay client token (for phone) at {}",
+                    "agent-aspect-bridge: relay client token (for phone) at {}",
                     paths::relay_client_token_path().display()
                 );
             }
             Err(e) => {
-                eprintln!("checkpoint-bridge: relay: {e}");
+                eprintln!("agent-aspect-bridge: relay: {e}");
             }
         }
     }
@@ -547,7 +552,7 @@ fn main() {
             };
 
             if let Err(e) = request.respond(response) {
-                eprintln!("checkpoint-bridge: respond error: {e}");
+                eprintln!("agent-aspect-bridge: respond error: {e}");
             }
 
             timing.log(&method, &path);

@@ -49,7 +49,7 @@ pub async fn serve_ui() -> Response {
         + ACTIVITY_SEGMENT_JS
         + "\n"
         + APP_JS
-        + "\nconsole.log('[checkpoint-relay] UI bundle v"
+        + "\nconsole.log('[agent-aspect-relay] UI bundle v"
         + env!("CARGO_PKG_VERSION")
         + " build="
         + env!("BUILD_TIME")

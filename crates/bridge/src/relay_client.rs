@@ -83,7 +83,7 @@ fn relay_client_loop(mut config: RelayConfig) {
         let mut was_ready = false;
         match connect_and_serve(&config, &mut was_ready) {
             Ok(()) => {
-                eprintln!("checkpoint-bridge: relay client disconnected");
+                eprintln!("agent-aspect-bridge: relay client disconnected");
                 if was_ready {
                     backoff_secs = 1;
                 }
@@ -93,7 +93,7 @@ fn relay_client_loop(mut config: RelayConfig) {
                     backoff_secs = 1;
                 }
                 if e.contains("sid_not_registered") {
-                    eprintln!("checkpoint-bridge: relay rejected token — re-registering");
+                    eprintln!("agent-aspect-bridge: relay rejected token — re-registering");
                     crate::auth::delete_relay_token_files();
                     match crate::auth::ensure_relay_tokens(&config.relay_url) {
                         Ok(new_tokens) => {
@@ -103,15 +103,15 @@ fn relay_client_loop(mut config: RelayConfig) {
                             continue; // retry immediately
                         }
                         Err(reg_err) => {
-                            eprintln!("checkpoint-bridge: relay re-register failed: {reg_err}");
+                            eprintln!("agent-aspect-bridge: relay re-register failed: {reg_err}");
                         }
                     }
                 } else {
-                    eprintln!("checkpoint-bridge: relay client error: {e}");
+                    eprintln!("agent-aspect-bridge: relay client error: {e}");
                 }
             }
         }
-        eprintln!("checkpoint-bridge: relay reconnecting in {backoff_secs}s");
+        eprintln!("agent-aspect-bridge: relay reconnecting in {backoff_secs}s");
         std::thread::sleep(Duration::from_secs(backoff_secs));
         backoff_secs = (backoff_secs * 2).min(MAX_BACKOFF_SECS);
     }
@@ -175,7 +175,7 @@ fn connect_and_serve(config: &RelayConfig, was_ready: &mut bool) -> Result<(), S
     }
 
     eprintln!(
-        "checkpoint-bridge: relay registered to {}",
+        "agent-aspect-bridge: relay registered to {}",
         config.relay_url
     );
     *was_ready = true;
@@ -218,7 +218,7 @@ fn connect_and_serve(config: &RelayConfig, was_ready: &mut bool) -> Result<(), S
                     .map_err(|e| format!("pong: {e}"))?;
             }
             Ok(tungstenite::Message::Close(_)) => {
-                eprintln!("checkpoint-bridge: relay connection closed by server");
+                eprintln!("agent-aspect-bridge: relay connection closed by server");
                 return Ok(());
             }
             Err(tungstenite::Error::Io(ref e))

@@ -17,7 +17,7 @@ Agent Aspect Relay is an optional server that lets your phone reach the Mac brid
 |------|-------------|-------|
 | **Local only** | Mac and phone on same LAN | Just use the bridge directly. |
 | **LAN / Tailscale** | Mac and phone on same network or Tailscale mesh | Set `bridge_lan_enabled = true` in config. |
-| **Self-hosted relay** | Phone on mobile data, Mac elsewhere | Run `checkpoint-relay` on a VPS you control. |
+| **Self-hosted relay** | Phone on mobile data, Mac elsewhere | Run `agent-aspect-relay` on a VPS you control. |
 
 ## Setup
 
@@ -28,19 +28,19 @@ Agent Aspect Relay is an optional server that lets your phone reach the Mac brid
 cargo install --path crates/relay
 
 # Run
-checkpoint-relay
+agent-aspect-relay
 ```
 
 On first start, the relay generates:
-- `~/.checkpoint-relay/relay.secret` -- HMAC signing key
-- `~/.checkpoint-relay/setup.token` -- one-time registration token
+- `~/.agent-aspect-relay/relay.secret` -- HMAC signing key
+- `~/.agent-aspect-relay/setup.token` -- one-time registration token
 
 The setup token is printed to stderr on first generation. Copy it.
 
 ### 2. Configure the relay URL on your Mac
 
 ```bash
-checkpoint bridge relay set-url wss://relay.example.com/ws
+agent-aspect bridge relay set-url wss://relay.example.com/ws
 ```
 
 ### 3. Provide the setup token
@@ -48,19 +48,19 @@ checkpoint bridge relay set-url wss://relay.example.com/ws
 Either place it in a file:
 
 ```bash
-echo "<setup-token>" > ~/.checkpoint/relay.setup_token
+echo "<setup-token>" > ~/.agent-aspect/relay.setup_token
 ```
 
 Or set it as an environment variable:
 
 ```bash
-export CHECKPOINT_RELAY_SETUP_TOKEN=<setup-token>
+export AGENT_ASPECT_RELAY_SETUP_TOKEN=<setup-token>
 ```
 
 ### 4. Restart the bridge
 
 ```bash
-checkpoint bridge restart
+agent-aspect bridge restart
 ```
 
 The bridge automatically registers with the relay on startup. It generates a `sid` (session ID), obtains mac and client tokens, and connects via WebSocket. The connection reconnects automatically on disconnect.
@@ -68,13 +68,13 @@ The bridge automatically registers with the relay on startup. It generates a `si
 ### 5. Check relay status
 
 ```bash
-checkpoint bridge relay status
+agent-aspect bridge relay status
 ```
 
 ### 6. Get the client token for your phone
 
 ```bash
-checkpoint bridge token --relay-client
+agent-aspect bridge token --relay-client
 ```
 
 ### 7. Access from your phone
@@ -86,8 +86,8 @@ Open `https://relay.example.com/` in your phone browser. Enter the client token 
 If your phone and Mac are on the same network, you can skip the relay and use LAN access directly:
 
 ```bash
-checkpoint bridge expose
-checkpoint bridge pair
+agent-aspect bridge expose
+agent-aspect bridge pair
 ```
 
 `pair` shows the LAN URL and token hint. `expose` binds the bridge to `0.0.0.0` so other devices can reach it.
@@ -110,14 +110,14 @@ cp .env.example .env
 docker compose -f docker-compose.relay.yml up -d
 ```
 
-The Docker setup only covers `checkpoint-relay`. The daemon, bridge, hook-cli, and CLI are not containerized -- they run natively on your Mac.
+The Docker setup only covers `agent-aspect-relay`. The daemon, bridge, hook-cli, and CLI are not containerized -- they run natively on your Mac.
 
 ## TLS
 
 If you expose the relay on the public internet, you must put it behind a TLS-terminating reverse proxy (nginx, Caddy, etc.). The relay itself does not handle TLS.
 
 ```
-Phone ── HTTPS ──> Caddy/nginx ── HTTP ──> checkpoint-relay
+Phone ── HTTPS ──> Caddy/nginx ── HTTP ──> agent-aspect-relay
 ```
 
 Example Caddyfile:
@@ -133,8 +133,8 @@ relay.example.com {
 To disconnect from the relay:
 
 ```bash
-checkpoint bridge relay unset-url
-checkpoint bridge restart
+agent-aspect bridge relay unset-url
+agent-aspect bridge restart
 ```
 
 This removes the relay URL from config and restarts the bridge without a relay connection. The registration on the relay side remains until the tokens expire (default 30 days) or the relay operator removes them.

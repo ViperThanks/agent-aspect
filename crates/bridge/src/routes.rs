@@ -90,7 +90,7 @@ pub fn read_mode() -> Mode {
     if config_path.exists() {
         match Config::load(&config_path) {
             Ok(c) => return c.mode,
-            Err(e) => eprintln!("checkpoint-bridge: config load error: {e}"),
+            Err(e) => eprintln!("agent-aspect-bridge: config load error: {e}"),
         }
     }
     Mode::Guard
@@ -248,7 +248,7 @@ fn touch_device(ctx: &AppContext, request: &tiny_http::Request) -> String {
         remote_addr.as_deref(),
         &timestamp,
     ) {
-        eprintln!("checkpoint-bridge: register device failed: {e}");
+        eprintln!("agent-aspect-bridge: register device failed: {e}");
     }
     device_id
 }
@@ -565,7 +565,7 @@ pub fn handle_get_events(ctx: &AppContext, request: &tiny_http::Request) -> tiny
 
     let result_count = events.len();
     eprintln!(
-        "checkpoint-bridge: GET /events limit={limit} offset={offset} results={result_count}"
+        "agent-aspect-bridge: GET /events limit={limit} offset={offset} results={result_count}"
     );
 
     json_response(
@@ -875,7 +875,7 @@ pub fn warm_uncached_stats_bg(store: &AuditStore, limit: usize) {
     let convs = match store.list_conversations_for_stats_warming(limit) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("checkpoint-bridge: warm stats query failed: {e}");
+            eprintln!("agent-aspect-bridge: warm stats query failed: {e}");
             return;
         }
     };
@@ -892,12 +892,12 @@ pub fn warm_uncached_stats_bg(store: &AuditStore, limit: usize) {
         if let Err(e) =
             store.update_cached_stats(&conv.id, stats.token_count, stats.file_size_bytes)
         {
-            eprintln!("checkpoint-bridge: warm stats update failed: {e}");
+            eprintln!("agent-aspect-bridge: warm stats update failed: {e}");
         }
     }
     if !convs.is_empty() {
         eprintln!(
-            "checkpoint-bridge: warmed stats for {} conversation(s)",
+            "agent-aspect-bridge: warmed stats for {} conversation(s)",
             convs.len()
         );
     }
@@ -977,11 +977,11 @@ impl RequestTiming {
 
         if total_ms > 2000 {
             eprintln!(
-                "checkpoint-bridge: SLOW {method} {path} total_ms={total_ms} queue_ms={queue_ms} route_ms={route_ms}"
+                "agent-aspect-bridge: SLOW {method} {path} total_ms={total_ms} queue_ms={queue_ms} route_ms={route_ms}"
             );
         } else if total_ms > 500 {
             eprintln!(
-                "checkpoint-bridge: slow {method} {path} total_ms={total_ms} queue_ms={queue_ms} route_ms={route_ms}"
+                "agent-aspect-bridge: slow {method} {path} total_ms={total_ms} queue_ms={queue_ms} route_ms={route_ms}"
             );
         }
     }
@@ -1471,7 +1471,7 @@ pub fn handle_get_overview(
 
     let result_count = convs_json.len();
     eprintln!(
-        "checkpoint-bridge: GET /overview limit={limit} offset={offset} results={result_count}"
+        "agent-aspect-bridge: GET /overview limit={limit} offset={offset} results={result_count}"
     );
 
     let response_body = serde_json::json!({
@@ -2110,7 +2110,7 @@ pub fn handle_get_conversation_messages(
     let read_ms = read_start.elapsed().as_millis();
 
     eprintln!(
-        "checkpoint-bridge: GET /conversations/{cid}/messages limit={limit} offset={offset} total={display_total} source={source} synced={} open_ms={db_open_ms} conv_ms={conv_ms} sync_ms={sync_ms} read_ms={read_ms} route_ms={}",
+        "agent-aspect-bridge: GET /conversations/{cid}/messages limit={limit} offset={offset} total={display_total} source={source} synced={} open_ms={db_open_ms} conv_ms={conv_ms} sync_ms={sync_ms} read_ms={read_ms} route_ms={}",
         sync_result.messages_synced,
         route_start.elapsed().as_millis()
     );
@@ -2221,7 +2221,7 @@ pub fn handle_get_conversation_messages_delta(
     let read_ms = read_start.elapsed().as_millis();
 
     eprintln!(
-        "checkpoint-bridge: GET /conversations/{cid}/messages/delta after={after} limit={limit} returned={} total={total} open_ms={db_open_ms} conv_ms={conv_ms} sync_ms={sync_ms} read_ms={read_ms} route_ms={}",
+        "agent-aspect-bridge: GET /conversations/{cid}/messages/delta after={after} limit={limit} returned={} total={total} open_ms={db_open_ms} conv_ms={conv_ms} sync_ms={sync_ms} read_ms={read_ms} route_ms={}",
         page.len(),
         route_start.elapsed().as_millis()
     );
@@ -2346,9 +2346,9 @@ fn decode_token_payload(token: &str) -> Option<serde_json::Value> {
 pub fn handle_get_relay_status() -> tiny_http::ResponseBox {
     let config = Config::load_or_create();
 
-    let relay_url = config
-        .relay_url
-        .or_else(|| std::env::var("CHECKPOINT_RELAY_URL").ok());
+    let relay_url = config.relay_url.or_else(|| {
+        checkpoint_core::env_compat::env_var("AGENT_ASPECT_RELAY_URL", "CHECKPOINT_RELAY_URL")
+    });
 
     let enabled = relay_url.is_some();
     let mobile_url = relay_url.as_deref().and_then(derive_mobile_url);
@@ -2389,9 +2389,9 @@ pub fn handle_get_relay_status() -> tiny_http::ResponseBox {
 pub fn handle_get_relay_pairing() -> tiny_http::ResponseBox {
     let config = Config::load_or_create();
 
-    let relay_url = config
-        .relay_url
-        .or_else(|| std::env::var("CHECKPOINT_RELAY_URL").ok());
+    let relay_url = config.relay_url.or_else(|| {
+        checkpoint_core::env_compat::env_var("AGENT_ASPECT_RELAY_URL", "CHECKPOINT_RELAY_URL")
+    });
 
     let mobile_url = match relay_url.as_deref().and_then(derive_mobile_url) {
         Some(u) => u,

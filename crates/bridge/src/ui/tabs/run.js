@@ -20,11 +20,11 @@ const RS = {
 window.RS = RS;
 
 const TEMPLATES = [
-  { id: 'status', label: '状态检查', prompt: '运行 checkpoint status 并报告结果' },
+  { id: 'status', label: '状态检查', prompt: '运行 agent-aspect status 并报告结果' },
   { id: 'git', label: 'Git 状态', prompt: '运行 git status 并报告结果' },
   { id: 'test', label: 'Cargo 测试', prompt: '运行 cargo test 并报告测试结果' },
   { id: 'smoke', label: '冒烟测试', prompt: '运行 scripts/smoke_test.sh 并报告结果' },
-  { id: 'mode', label: '模式设置', prompt: '运行 checkpoint mode guard' }
+  { id: 'mode', label: '模式设置', prompt: '运行 agent-aspect mode guard' }
 ];
 
 /* ---------- Layout ---------- */

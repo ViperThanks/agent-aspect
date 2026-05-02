@@ -1,23 +1,46 @@
 //! 文件系统路径 — DB、配置、PID、socket、launchd plist 等标准位置。
 //!
-//! 所有路径基于 `~/.checkpoint/`，$HOME 缺失时回退到 `/tmp`。
+//! 路径读取优先级：
+//! 1. `~/.agent-aspect/`（新）
+//! 2. `~/.checkpoint/`（旧兼容）
+//! 3. `/tmp`（$HOME 缺失时 fallback）
+//!
+//! 新安装写入 `~/.agent-aspect/`；若只存在旧目录，则沿用旧目录以保持兼容。
 
 use std::path::PathBuf;
 
-const CHECKPOINT_DIR: &str = ".checkpoint";
+const AGENT_ASPECT_DIR: &str = ".agent-aspect";
+const LEGACY_DIR: &str = ".checkpoint";
 const SOCKET_FILE: &str = "ipc.sock";
 const AUDIT_DB_FILE: &str = "audit.db";
 const CONFIG_FILE: &str = "config.toml";
 const STATE_FILE: &str = "state.json";
 
-/// 基础目录 `~/.checkpoint/`。
+/// 基础目录。优先 `~/.agent-aspect/`，不存在时回退 `~/.checkpoint/`。
 fn base_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join(CHECKPOINT_DIR)
+    let new_dir = PathBuf::from(&home).join(AGENT_ASPECT_DIR);
+    if new_dir.exists() {
+        return new_dir;
+    }
+    let legacy_dir = PathBuf::from(&home).join(LEGACY_DIR);
+    if legacy_dir.exists() {
+        return legacy_dir;
+    }
+    // 两者都不存在：返回新目录（写入时使用）
+    new_dir
 }
 
 fn join_in_base(file_name: &str) -> PathBuf {
     base_dir().join(file_name)
+}
+
+/// 是否正在使用旧目录（doctor 用来提示迁移）。
+pub fn using_legacy_dir() -> bool {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let new_dir = PathBuf::from(&home).join(AGENT_ASPECT_DIR);
+    let legacy_dir = PathBuf::from(&home).join(LEGACY_DIR);
+    !new_dir.exists() && legacy_dir.exists()
 }
 
 /// Unix domain socket 路径（用于 CLI ↔ daemon IPC）。
@@ -40,21 +63,22 @@ pub fn state_path() -> PathBuf {
     join_in_base(STATE_FILE)
 }
 
+/// 当前活跃的数据目录。
 pub fn checkpoint_dir() -> PathBuf {
     base_dir()
 }
 
 /// daemon 日志路径。
 pub fn daemon_log_path() -> PathBuf {
-    join_in_base("checkpointd.log")
+    join_in_base("agent-aspectd.log")
 }
 
 pub fn daemon_stdout_log_path() -> PathBuf {
-    join_in_base("checkpointd.stdout.log")
+    join_in_base("agent-aspectd.stdout.log")
 }
 
 pub fn daemon_stderr_log_path() -> PathBuf {
-    join_in_base("checkpointd.stderr.log")
+    join_in_base("agent-aspectd.stderr.log")
 }
 
 /// launchd plist 路径 — 用于 macOS 自动启动 daemon。
@@ -63,7 +87,7 @@ pub fn launchd_plist_path() -> PathBuf {
     PathBuf::from(home)
         .join("Library")
         .join("LaunchAgents")
-        .join("com.checkpoint.daemon.plist")
+        .join("com.agent-aspect.daemon.plist")
 }
 
 /// bridge 的 launchd plist 路径。
@@ -72,7 +96,7 @@ pub fn bridge_launchd_plist_path() -> PathBuf {
     PathBuf::from(home)
         .join("Library")
         .join("LaunchAgents")
-        .join("com.checkpoint.bridge.plist")
+        .join("com.agent-aspect.bridge.plist")
 }
 
 /// bridge 认证 token 文件。

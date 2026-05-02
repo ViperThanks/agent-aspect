@@ -1,4 +1,4 @@
-# Docker Compose for checkpoint-relay only.
+# Docker Compose for agent-aspect-relay only.
 #
 # The daemon, bridge, hook-cli, and CLI run natively on your Mac.
 # This compose file is for deploying the relay on a VPS.
@@ -13,7 +13,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.relay
-    container_name: checkpoint-relay
+    container_name: agent-aspect-relay
     restart: unless-stopped
     ports:
       - "${RELAY_LISTEN_PORT:-8080}:8080"
@@ -22,7 +22,7 @@ services:
       - RELAY_SECRET=${RELAY_SECRET:-}
       - RELAY_SETUP_TOKEN=${RELAY_SETUP_TOKEN:-}
     volumes:
-      - relay-data:/root/.checkpoint-relay
+      - relay-data:/root/.agent-aspect-relay
 
 volumes:
   relay-data:

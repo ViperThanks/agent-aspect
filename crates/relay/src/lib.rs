@@ -7,7 +7,7 @@
 //! - Mac Bridge 通过 WebSocket 连接到本服务，接收转发请求并返回响应。
 //!
 //! 不变量：
-//! - relay.secret 和 setup.token 首次生成后持久化到 ~/.checkpoint-relay/，重启后复用。
+//! - relay.secret 和 setup.token 首次生成后持久化到 ~/.agent-aspect-relay/，重启后复用。
 //! - registered_tokens.json 每次写入使用 rename(原子替换)，保证断电不丢数据。
 //! - 过期的 token 在加载时被清理。
 
@@ -55,10 +55,19 @@ pub struct AppState {
     pub register_limiter: register::SharedRateLimiter,
 }
 
-/// 获取 relay 状态目录（~/.checkpoint-relay/）。
+/// 获取 relay 状态目录（~/.agent-aspect-relay/）。
+/// 若新目录不存在但旧目录 ~/.checkpoint-relay/ 存在，则回退到旧目录以保持兼容。
 fn relay_state_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join(".checkpoint-relay")
+    let new_dir = PathBuf::from(&home).join(".agent-aspect-relay");
+    if new_dir.exists() {
+        return new_dir;
+    }
+    let old_dir = PathBuf::from(&home).join(".checkpoint-relay");
+    if old_dir.exists() {
+        return old_dir;
+    }
+    new_dir
 }
 
 /// 获取已注册令牌的持久化文件路径。
@@ -77,7 +86,7 @@ pub fn load_registered_tokens_from(path: &Path) -> HashMap<String, StoredTokens>
 
     let raw = std::fs::read_to_string(path).unwrap_or_else(|e| {
         eprintln!(
-            "checkpoint-relay: read registered tokens failed at {}: {e}",
+            "agent-aspect-relay: read registered tokens failed at {}: {e}",
             path.display()
         );
         std::process::exit(1);
@@ -87,7 +96,7 @@ pub fn load_registered_tokens_from(path: &Path) -> HashMap<String, StoredTokens>
     let mut tokens: HashMap<String, StoredTokens> =
         serde_json::from_str(&raw).unwrap_or_else(|e| {
             eprintln!(
-                "checkpoint-relay: parse registered tokens failed at {}: {e}",
+                "agent-aspect-relay: parse registered tokens failed at {}: {e}",
                 path.display()
             );
             std::process::exit(1);
@@ -99,7 +108,7 @@ pub fn load_registered_tokens_from(path: &Path) -> HashMap<String, StoredTokens>
         |sid, item| match chrono::DateTime::parse_from_rfc3339(&item.expires_at) {
             Ok(exp) => exp.with_timezone(&chrono::Utc) > now,
             Err(e) => {
-                eprintln!("checkpoint-relay: drop token with invalid expires_at sid={sid}: {e}");
+                eprintln!("agent-aspect-relay: drop token with invalid expires_at sid={sid}: {e}");
                 false
             }
         },
@@ -108,13 +117,13 @@ pub fn load_registered_tokens_from(path: &Path) -> HashMap<String, StoredTokens>
     // 有条目被清理时重新写入磁盘
     if tokens.len() != before {
         if let Err(e) = save_registered_tokens_to(path, &tokens) {
-            eprintln!("checkpoint-relay: prune expired registered tokens failed: {e}");
+            eprintln!("agent-aspect-relay: prune expired registered tokens failed: {e}");
             std::process::exit(1);
         }
     }
 
     eprintln!(
-        "checkpoint-relay: loaded {} registered token pair(s)",
+        "agent-aspect-relay: loaded {} registered token pair(s)",
         tokens.len()
     );
     tokens
@@ -173,7 +182,7 @@ pub fn save_registered_tokens_to(
 
 /// 加载或首次生成 HMAC 签名密钥。
 ///
-/// 优先使用环境变量 RELAY_SECRET，否则从 ~/.checkpoint-relay/relay.secret 读取。
+/// 优先使用环境变量 RELAY_SECRET，否则从 ~/.agent-aspect-relay/relay.secret 读取。
 /// 文件不存在时生成 32 字节随机密钥并持久化（权限 0600）。
 fn load_or_create_secret() -> Vec<u8> {
     if let Ok(s) = std::env::var("RELAY_SECRET") {
@@ -186,7 +195,7 @@ fn load_or_create_secret() -> Vec<u8> {
 
     if path.exists() {
         return std::fs::read(&path).unwrap_or_else(|e| {
-            eprintln!("checkpoint-relay: read secret failed: {e}");
+            eprintln!("agent-aspect-relay: read secret failed: {e}");
             std::process::exit(1);
         });
     }
@@ -211,13 +220,13 @@ fn load_or_create_secret() -> Vec<u8> {
         std::fs::write(&path, &buf).expect("write secret");
     }
 
-    eprintln!("checkpoint-relay: generated secret at {}", path.display());
+    eprintln!("agent-aspect-relay: generated secret at {}", path.display());
     buf.to_vec()
 }
 
 /// 加载或首次生成 setup token（用于 /api/register 鉴权）。
 ///
-/// 优先使用环境变量 RELAY_SETUP_TOKEN，否则从 ~/.checkpoint-relay/setup.token 读取。
+/// 优先使用环境变量 RELAY_SETUP_TOKEN，否则从 ~/.agent-aspect-relay/setup.token 读取。
 /// 文件不存在时生成 64 字符十六进制 token 并持久化（权限 0600）。
 fn load_or_create_setup_token() -> String {
     if let Ok(t) = std::env::var("RELAY_SETUP_TOKEN") {
@@ -232,7 +241,7 @@ fn load_or_create_setup_token() -> String {
         return std::fs::read_to_string(&path)
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|e| {
-                eprintln!("checkpoint-relay: read setup token failed: {e}");
+                eprintln!("agent-aspect-relay: read setup token failed: {e}");
                 std::process::exit(1);
             });
     }
@@ -259,7 +268,7 @@ fn load_or_create_setup_token() -> String {
     }
 
     eprintln!(
-        "checkpoint-relay: generated setup token at {}",
+        "agent-aspect-relay: generated setup token at {}",
         path.display()
     );
     token
@@ -289,14 +298,14 @@ pub async fn run_server() {
     let listener = tokio::net::TcpListener::bind(&listen_addr)
         .await
         .unwrap_or_else(|e| {
-            eprintln!("checkpoint-relay: bind {listen_addr} failed: {e}");
+            eprintln!("agent-aspect-relay: bind {listen_addr} failed: {e}");
             std::process::exit(1);
         });
 
-    eprintln!("checkpoint-relay: listening on {listen_addr}");
+    eprintln!("agent-aspect-relay: listening on {listen_addr}");
 
     axum::serve(listener, app).await.unwrap_or_else(|e| {
-        eprintln!("checkpoint-relay: server error: {e}");
+        eprintln!("agent-aspect-relay: server error: {e}");
         std::process::exit(1);
     });
 }

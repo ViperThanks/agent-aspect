@@ -1,4 +1,4 @@
-//! `checkpoint init` — 安装 AI agent 的 hook 配置。
+//! `agent-aspect init` — 安装 AI agent 的 hook 配置。
 //!
 //! 支持三家 agent：Claude Code（settings.json）、Codex CLI（hooks.json）、
 //! Kimi Code（config.toml）。每个 agent 写入三个事件钩子：
@@ -14,7 +14,7 @@ use checkpoint_core::paths;
 use super::helpers::bin_dir;
 
 /// 在 hook 命令中搜索此标记来判断是否已安装。
-const CHECKPOINT_MARKER: &str = "checkpoint-hook";
+const HOOK_MARKER: &str = "agent-aspect-hook";
 
 /// init 子命令入口。
 ///
@@ -34,7 +34,7 @@ pub fn cmd_init(arg: Option<&str>) {
 }
 
 fn print_usage() {
-    eprintln!("usage: checkpoint init [agents]");
+    eprintln!("usage: agent-aspect init [agents]");
     eprintln!();
     eprintln!("Installs verified agent hook configuration:");
     eprintln!("  Claude Code  ~/.claude/settings.json");
@@ -43,28 +43,35 @@ fn print_usage() {
 }
 
 /// 依次为 Claude / Codex / Kimi 安装 hook 配置。
-/// 定位 checkpoint-hook 二进制后，生成带 `CHECKPOINT_AGENT` 前缀的命令。
+/// 定位 agent-aspect-hook 二进制后，生成带 `AGENT_ASPECT_AGENT` 前缀的命令。
 fn init_agents() {
     let Some(dir) = bin_dir() else {
         eprintln!("FAIL: cannot determine binary directory");
         std::process::exit(1);
     };
-    let hook_bin = dir.join("checkpoint-hook");
-    if !hook_bin.exists() {
-        eprintln!("FAIL: checkpoint-hook not found at {}", hook_bin.display());
-        std::process::exit(1);
-    }
+    // Prefer new binary name, fall back to legacy
+    let hook_bin = dir.join("agent-aspect-hook");
+    let hook_bin = if hook_bin.exists() {
+        hook_bin
+    } else {
+        let legacy = dir.join("checkpoint-hook");
+        if !legacy.exists() {
+            eprintln!("FAIL: agent-aspect-hook not found at {}", dir.display());
+            std::process::exit(1);
+        }
+        legacy
+    };
     let hook = hook_bin
         .canonicalize()
         .unwrap_or(hook_bin)
         .display()
         .to_string();
 
-    println!("checkpoint init: installing agent hook configs");
+    println!("agent-aspect init: installing agent hook configs");
     install_claude(&hook);
     install_codex(&hook);
     install_kimi(&hook);
-    println!("checkpoint init: done");
+    println!("agent-aspect init: done");
 }
 
 /// 确保文件父目录存在，不存在则递归创建。
@@ -118,9 +125,9 @@ fn write_json(path: &std::path::Path, value: &serde_json::Value) {
     }
 }
 
-/// 生成带 agent 标识的 hook 命令：`CHECKPOINT_AGENT=<agent> <hook>`。
+/// 生成带 agent 标识的 hook 命令：`AGENT_ASPECT_AGENT=<agent> <hook>`。
 fn hook_command(hook: &str, agent: &str) -> String {
-    format!("CHECKPOINT_AGENT={agent} {hook}")
+    format!("AGENT_ASPECT_AGENT={agent} {hook}")
 }
 
 /// 在 JSON hooks 配置中确保指定事件的 hook 条目存在。
@@ -145,14 +152,13 @@ fn ensure_json_hook_entry(root: &mut serde_json::Value, event_key: &str, command
         std::process::exit(1);
     }
 
-    // Check if our hook is already in this event array
-    let needle = CHECKPOINT_MARKER;
+    // Check if our hook is already in this event array (match both new and old marker)
     for entry in event_arr.as_array().unwrap() {
         if let Some(hooks_arr) = entry.get("hooks").and_then(|h| h.as_array()) {
             if hooks_arr.iter().any(|h| {
                 h.get("command")
                     .and_then(|c| c.as_str())
-                    .map(|s| s.contains(needle))
+                    .map(|s| s.contains(HOOK_MARKER) || s.contains("checkpoint-hook"))
                     .unwrap_or(false)
             }) {
                 return false; // already installed
@@ -181,7 +187,8 @@ fn install_claude(hook: &str) {
     let mut root = read_json_or_object(&path);
     let command = hook_command(hook, "claude");
 
-    let already = !json_contains_command(&root, CHECKPOINT_MARKER);
+    let already = !json_contains_command(&root, HOOK_MARKER)
+        && !json_contains_command(&root, "checkpoint-hook");
     let mut changed = false;
 
     for event in ["PreToolUse", "SessionStart", "UserPromptSubmit"] {

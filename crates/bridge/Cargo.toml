@@ -12,6 +12,10 @@ path = "src/lib.rs"
 name = "checkpoint-bridge"
 path = "src/main.rs"
 
+[[bin]]
+name = "agent-aspect-bridge"
+path = "src/main.rs"
+
 [dependencies]
 checkpoint-core = { path = "../core" }
 tiny_http = "0.12"

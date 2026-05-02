@@ -8,16 +8,16 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BIN="$ROOT/target/debug"
 
 echo "=== building ==="
-cargo build --manifest-path "$ROOT/Cargo.toml" -p checkpoint-bridge 2>&1
+cargo build --manifest-path "$ROOT/Cargo.toml" --bin agent-aspect-bridge --bin agent-aspect 2>&1
 
 # 隔离 HOME，避免污染用户真实数据
-HOME_OVERRIDE="/tmp/checkpoint-bridge-smoke-$$"
-mkdir -p "$HOME_OVERRIDE/.checkpoint"
+HOME_OVERRIDE="/tmp/agent-aspect-bridge-smoke-$$"
+mkdir -p "$HOME_OVERRIDE/.agent-aspect"
 export HOME="$HOME_OVERRIDE"
 export PATH="$BIN:$PATH"
 
 # bridge 的 git_status / cargo_test / smoke_test 需要在 project_dir 运行
-PROJECT_DIR="$HOME_OVERRIDE/Coding/Personal/checkpoint"
+PROJECT_DIR="$HOME_OVERRIDE/Coding/Personal/agent-aspect"
 mkdir -p "$PROJECT_DIR"
 cd "$PROJECT_DIR"
 git init --quiet
@@ -25,10 +25,10 @@ echo "hello" > README.md
 
 # 随机端口避免与已有 bridge 冲突
 PORT=$((7600 + RANDOM % 1000))
-export CHECKPOINT_BRIDGE_ADDR="127.0.0.1:$PORT"
+export AGENT_ASPECT_BRIDGE_ADDR="127.0.0.1:$PORT"
 
-echo "=== starting bridge on $CHECKPOINT_BRIDGE_ADDR ==="
-"$BIN/checkpoint-bridge" &
+echo "=== starting bridge on $AGENT_ASPECT_BRIDGE_ADDR ==="
+"$BIN/agent-aspect-bridge" &
 BRIDGE_PID=$!
 sleep 1
 
@@ -45,8 +45,8 @@ fi
 
 TOKEN=""
 for i in $(seq 1 10); do
-    if [ -f "$HOME_OVERRIDE/.checkpoint/bridge.token" ]; then
-        TOKEN="$(cat "$HOME_OVERRIDE/.checkpoint/bridge.token")"
+    if [ -f "$HOME_OVERRIDE/.agent-aspect/bridge.token" ]; then
+        TOKEN="$(cat "$HOME_OVERRIDE/.agent-aspect/bridge.token")"
         break
     fi
     sleep 0.5
@@ -257,8 +257,8 @@ fi
 # ──────────────────────────────────────────────
 
 echo ""
-echo "=== test 14: checkpoint bridge pair shows URLs ==="
-PAIR_OUTPUT=$(checkpoint bridge pair 2>&1 || true)
+echo "=== test 14: agent-aspect bridge pair shows URLs ==="
+PAIR_OUTPUT=$(agent-aspect bridge pair 2>&1 || true)
 if echo "$PAIR_OUTPUT" | grep -q "Local URL:" && echo "$PAIR_OUTPUT" | grep -q "Token hint:"; then
     echo "PASS"
 else
@@ -267,8 +267,8 @@ else
 fi
 
 echo ""
-echo "=== test 15: checkpoint bridge status shows LAN state ==="
-STATUS_OUTPUT=$(checkpoint bridge status 2>&1 || true)
+echo "=== test 15: agent-aspect bridge status shows LAN state ==="
+STATUS_OUTPUT=$(agent-aspect bridge status 2>&1 || true)
 if echo "$STATUS_OUTPUT" | grep -q "LAN:" && echo "$STATUS_OUTPUT" | grep -q "token:"; then
     echo "PASS"
 else
@@ -277,8 +277,8 @@ else
 fi
 
 echo ""
-echo "=== test 16: checkpoint bridge status does not print full token ==="
-STATUS_OUTPUT=$(checkpoint bridge status 2>&1 || true)
+echo "=== test 16: agent-aspect bridge status does not print full token ==="
+STATUS_OUTPUT=$(agent-aspect bridge status 2>&1 || true)
 if echo "$STATUS_OUTPUT" | grep -q "$TOKEN"; then
     echo "FAIL: status output contains full token"
     FAILED=1
@@ -288,7 +288,7 @@ fi
 
 echo ""
 echo "=== test 17: expose/unexpose config round-trip ==="
-CONFIG_FILE="$HOME/.checkpoint/config.toml"
+CONFIG_FILE="$HOME/.agent-aspect/config.toml"
 
 sed -i '' 's/^bridge_addr = .*/bridge_addr = "0.0.0.0:7676"/' "$CONFIG_FILE"
 if ! grep -q '^bridge_lan_enabled' "$CONFIG_FILE"; then
@@ -535,7 +535,7 @@ fi
 
 echo ""
 echo "=== test 33: bb7a22a7 regression — permission downgrade → drift guard blocks resume ==="
-DB_PATH="$HOME/.checkpoint/audit.db"
+DB_PATH="$HOME/.agent-aspect/audit.db"
 DRIFT_CONV_ID="drift-test-bb7a22a7"
 sqlite3 "$DB_PATH" "INSERT OR REPLACE INTO conversations (id, agent, conversation_id, title, project_path, started_at, last_seen_at, model_id, runtime_profile, permission_mode, identity_version) VALUES ('$DRIFT_CONV_ID','claude_code','drift-thread','drift test','$PROJECT_DIR','$(date -u +%Y-%m-%dT%H:%M:%SZ)','$(date -u +%Y-%m-%dT%H:%M:%SZ)','sonnet','default','bypassPermissions',1);"
 RESP=$(curl -s -w "\n%{http_code}" -X POST \

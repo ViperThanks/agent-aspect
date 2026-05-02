@@ -8,11 +8,11 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BIN="$ROOT/target/debug"
 
 echo "=== building ==="
-cargo build --manifest-path "$ROOT/Cargo.toml" -p checkpoint-relay -p checkpoint-bridge 2>&1
+cargo build --manifest-path "$ROOT/Cargo.toml" --bin agent-aspect-relay --bin agent-aspect-bridge 2>&1
 
 # 隔离 HOME
-HOME_OVERRIDE="/tmp/checkpoint-relay-smoke-$$"
-mkdir -p "$HOME_OVERRIDE/.checkpoint" "$HOME_OVERRIDE/.checkpoint-relay"
+HOME_OVERRIDE="/tmp/agent-aspect-relay-smoke-$$"
+mkdir -p "$HOME_OVERRIDE/.agent-aspect" "$HOME_OVERRIDE/.agent-aspect-relay"
 export HOME="$HOME_OVERRIDE"
 
 # relay 环境变量
@@ -22,10 +22,10 @@ RELAY_PORT=$((8800 + RANDOM % 1000))
 export RELAY_LISTEN_ADDR="127.0.0.1:$RELAY_PORT"
 
 # bridge 环境变量
-export CHECKPOINT_RELAY_SETUP_TOKEN="$SETUP_TOKEN"
-export CHECKPOINT_RELAY_URL="ws://127.0.0.1:$RELAY_PORT/ws"
+export AGENT_ASPECT_RELAY_SETUP_TOKEN="$SETUP_TOKEN"
+export AGENT_ASPECT_RELAY_URL="ws://127.0.0.1:$RELAY_PORT/ws"
 BRIDGE_PORT=$((7600 + RANDOM % 1000))
-export CHECKPOINT_BRIDGE_ADDR="127.0.0.1:$BRIDGE_PORT"
+export AGENT_ASPECT_BRIDGE_ADDR="127.0.0.1:$BRIDGE_PORT"
 
 # 创建 project dir (bridge 需要)
 PROJECT_DIR="$HOME_OVERRIDE/project"
@@ -35,7 +35,7 @@ git init --quiet 2>/dev/null || true
 echo "hello" > README.md
 
 echo "=== starting relay on $RELAY_LISTEN_ADDR ==="
-"$BIN/checkpoint-relay" &
+"$BIN/agent-aspect-relay" &
 RELAY_PID=$!
 sleep 1
 
@@ -54,7 +54,7 @@ FAILED=0
 echo ""
 echo "=== test 1: GET / (serves mobile UI) ==="
 UI_RESP=$(curl -s "$RELAY_API/")
-if grep -q "Checkpoint" <<< "$UI_RESP"; then
+if grep -q "Agent Aspect" <<< "$UI_RESP"; then
     echo "PASS"
 else
     echo "FAIL: UI did not serve"
@@ -229,15 +229,15 @@ fi
 # ============================================================
 
 echo ""
-echo "=== starting bridge on $CHECKPOINT_BRIDGE_ADDR ==="
-"$BIN/checkpoint-bridge" &
+echo "=== starting bridge on $AGENT_ASPECT_BRIDGE_ADDR ==="
+"$BIN/agent-aspect-bridge" &
 BRIDGE_PID=$!
 sleep 2
 
 if ! kill -0 "$BRIDGE_PID" 2>/dev/null; then
     echo "WARN: bridge did not start — skipping proxy tests"
 else
-    BRIDGE_CLIENT_TOKEN_PATH="$HOME_OVERRIDE/.checkpoint/relay.client_token"
+    BRIDGE_CLIENT_TOKEN_PATH="$HOME_OVERRIDE/.agent-aspect/relay.client_token"
     BRIDGE_CLIENT_TOKEN=""
     for i in $(seq 1 15); do
         if [ -s "$BRIDGE_CLIENT_TOKEN_PATH" ]; then

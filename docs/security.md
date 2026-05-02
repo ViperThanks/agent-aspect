@@ -6,21 +6,21 @@
 
 ## Components
 
-### Daemon (`checkpointd`)
+### Daemon (`agent-aspectd`)
 
 - Runs as a local Unix socket server.
 - Evaluates every tool call against the rule engine.
 - Stores all events and decisions in a local SQLite database.
 - Never sends data to external services.
 
-### Bridge (`checkpoint-bridge`)
+### Bridge (`agent-aspect-bridge`)
 
 - Token-protected HTTP server on `127.0.0.1:7676` by default.
 - All endpoints require Bearer token auth except `GET /health`.
-- Token is generated locally via `getrandom` (cryptographically secure) and stored at `~/.checkpoint/bridge.token`.
+- Token is generated locally via `getrandom` (cryptographically secure) and stored at `~/.agent-aspect/bridge.token`.
 - CORS is disabled by default. No cross-origin requests are accepted unless you explicitly enable it.
 
-### Relay (`checkpoint-relay`)
+### Relay (`agent-aspect-relay`)
 
 - Proxies HTTP requests from phone to Mac bridge over WebSocket.
 - Does not store audit data, transcripts, or user content.

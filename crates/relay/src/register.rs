@@ -158,7 +158,7 @@ pub async fn handle_register(
         );
         if let Err(e) = crate::save_registered_tokens_to(&state.registered_tokens_path, &tokens) {
             tokens.remove(&sid);
-            eprintln!("checkpoint-relay: persist registered tokens failed: {e}");
+            eprintln!("agent-aspect-relay: persist registered tokens failed: {e}");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "persist_registered_tokens_failed"})),
@@ -168,7 +168,7 @@ pub async fn handle_register(
     }
 
     eprintln!(
-        "checkpoint-relay: registered sid {} (label={})...",
+        "agent-aspect-relay: registered sid {} (label={})...",
         &sid[..8.min(sid.len())],
         body.label
     );
@@ -216,7 +216,7 @@ pub async fn handle_unregister(
             if let Some(stored) = removed {
                 tokens.insert(body.sid.clone(), stored);
             }
-            eprintln!("checkpoint-relay: persist registered token removal failed: {e}");
+            eprintln!("agent-aspect-relay: persist registered token removal failed: {e}");
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "persist_registered_tokens_failed"})),
@@ -226,7 +226,7 @@ pub async fn handle_unregister(
     }
 
     eprintln!(
-        "checkpoint-relay: unregistered sid {}...",
+        "agent-aspect-relay: unregistered sid {}...",
         &body.sid[..8.min(body.sid.len())]
     );
 

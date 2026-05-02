@@ -1,4 +1,4 @@
-//! `checkpoint conversations` — 会话管理命令。
+//! `agent-aspect conversations` — 会话管理命令。
 //!
 //! 目前只有一个子命令 `import-titles`：从 provider 的 transcript 文件
 //! 导入真实会话标题，替换 audit.db 中的 fallback 标题。
@@ -12,7 +12,7 @@ pub fn cmd_conversations(sub: Option<&str>) {
     match sub {
         Some("import-titles") => import_titles(),
         _ => {
-            eprintln!("usage: checkpoint conversations <import-titles>");
+            eprintln!("usage: agent-aspect conversations <import-titles>");
             std::process::exit(1);
         }
     }

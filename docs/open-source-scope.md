@@ -9,7 +9,7 @@ Everything in the `crates/` directory is open source:
 | `core` | Shared types, SQLite audit store, rule engine, normalization, transcripts |
 | `daemon` | Unix-socket daemon that evaluates hook requests |
 | `hook-cli` | Agent hook entrypoint |
-| `cli` | `checkpoint` command-line management tool |
+| `cli` | `agent-aspect` command-line management tool |
 | `bridge` | Token-protected HTTP bridge and embedded web UI |
 | `relay` | User-owned VPS relay for phone access |
 | `shared_ui` | Shared frontend primitives used by bridge and relay |

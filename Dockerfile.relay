@@ -1,4 +1,4 @@
-# Build checkpoint-relay from source.
+# Build agent-aspect-relay from source.
 # Only the relay binary is built; other workspace members are copied for
 # workspace resolution but not compiled.
 
@@ -9,10 +9,10 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
 
 # Build only the relay binary
-RUN cargo build --release --bin checkpoint-relay
+RUN cargo build --release --bin agent-aspect-relay
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/target/release/checkpoint-relay /usr/local/bin/checkpoint-relay
+COPY --from=builder /app/target/release/agent-aspect-relay /usr/local/bin/agent-aspect-relay
 EXPOSE 8080
-CMD ["checkpoint-relay"]
+CMD ["agent-aspect-relay"]

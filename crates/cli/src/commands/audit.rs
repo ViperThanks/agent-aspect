@@ -1,6 +1,6 @@
-//! `checkpoint audit` — 查询最近审计决策记录。
+//! `agent-aspect audit` — 查询最近审计决策记录。
 //!
-//! 直接读 audit.db，不走 IPC。支持 `checkpoint audit <N>` 指定条数，默认 20。
+//! 直接读 audit.db，不走 IPC。支持 `agent-aspect audit <N>` 指定条数，默认 20。
 //! 输出时间戳截断到秒（前 19 字符），避免 ISO 精度过长影响可读性。
 
 use checkpoint_core::audit::AuditStore;

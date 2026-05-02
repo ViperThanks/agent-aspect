@@ -1,4 +1,4 @@
-//! `checkpoint status` — 显示 daemon 运行状态、当前模式和审计计数。
+//! `agent-aspect status` — 显示 daemon 运行状态、当前模式和审计计数。
 //!
 //! 不经过 IPC，直接探测 Unix socket 是否可连接来判断 daemon 存活；
 //! 模式从 daemon 写的 state.json 读取（而非本进程 env），保证与 daemon 实际状态一致。
@@ -6,7 +6,7 @@
 use checkpoint_core::audit::AuditStore;
 use checkpoint_core::paths;
 
-/// 显示 checkpoint 系统当前状态概览。
+/// 显示 agent-aspect 系统当前状态概览。
 ///
 /// 输出三行信息：
 /// 1. `daemon: running/stopped` — 通过尝试连接 Unix socket 判断

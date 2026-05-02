@@ -36,16 +36,19 @@ use crate::routes::json_response;
 use crate::sse::{self, SharedBroadcaster};
 
 const ALLOWED_KINDS: &[&str] = &[
-    "checkpoint_status",
+    "agent_aspect_status",
     "git_status",
     "cargo_test",
     "smoke_test",
+    "agent_aspect_mode",
+    // 兼容旧客户端提交的历史 kind。
+    "checkpoint_status",
     "checkpoint_mode",
     "custom_prompt",
     "agent_prompt",
 ];
 
-const CHECKPOINT_PROJECT_DIR: &str = "Coding/Personal/checkpoint";
+const AGENT_ASPECT_PROJECT_DIR: &str = "Coding/Personal/agent-aspect";
 
 /// 从 HTTP 请求头中提取指定 header 的值。
 fn header_value<'a>(request: &'a tiny_http::Request, name: &'static str) -> Option<&'a str> {
@@ -140,10 +143,10 @@ impl JobRunner {
             let now = chrono::Utc::now().to_rfc3339();
             match store.recover_stale_active_jobs(&runner_id, &now) {
                 Ok(count) if count > 0 => {
-                    eprintln!("checkpoint-bridge: recovered {count} stale active job(s)");
+                    eprintln!("agent-aspect-bridge: recovered {count} stale active job(s)");
                 }
                 Ok(_) => {}
-                Err(e) => eprintln!("checkpoint-bridge: stale job recovery failed: {e}"),
+                Err(e) => eprintln!("agent-aspect-bridge: stale job recovery failed: {e}"),
             }
         }
         bind_recent_unbound_provider_conversations(&db_path);
@@ -167,11 +170,11 @@ impl JobRunner {
 
     pub fn available_kinds() -> Vec<serde_json::Value> {
         const LABELS: &[(&str, &str)] = &[
-            ("checkpoint_status", "状态检查"),
+            ("agent_aspect_status", "状态检查"),
             ("git_status", "Git 状态"),
             ("cargo_test", "Cargo 测试"),
             ("smoke_test", "冒烟测试"),
-            ("checkpoint_mode", "模式设置"),
+            ("agent_aspect_mode", "模式设置"),
             ("agent_prompt", "代理提示词"),
         ];
         LABELS
@@ -603,7 +606,7 @@ fn build_command(
     registry: &ProviderRegistry,
 ) -> Result<std::process::Command, String> {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    let default_project_dir = format!("{home}/{CHECKPOINT_PROJECT_DIR}");
+    let default_project_dir = format!("{home}/{AGENT_ASPECT_PROJECT_DIR}");
     let project_dir = project_path
         .filter(|p| !p.is_empty())
         .map(|p| {
@@ -616,8 +619,8 @@ fn build_command(
         .unwrap_or(default_project_dir);
 
     match kind {
-        "checkpoint_status" => {
-            let mut cmd = std::process::Command::new("checkpoint");
+        "agent_aspect_status" | "checkpoint_status" => {
+            let mut cmd = std::process::Command::new("agent-aspect");
             cmd.arg("status");
             cmd.current_dir(&home);
             Ok(cmd)
@@ -637,21 +640,21 @@ fn build_command(
             Ok(cmd)
         }
         "smoke_test" => {
-            // smoke_test only allowed for checkpoint repo
-            if project_path.is_some() && project_path != Some(CHECKPOINT_PROJECT_DIR) {
-                return Err("smoke_test is only available for the checkpoint project".to_string());
+            // smoke_test only allowed for this project
+            if project_path.is_some() && project_path != Some(AGENT_ASPECT_PROJECT_DIR) {
+                return Err("smoke_test is only available for the Agent Aspect project".to_string());
             }
             let mut cmd = std::process::Command::new("bash");
             cmd.arg(format!("{project_dir}/scripts/smoke_test.sh"));
             cmd.current_dir(&project_dir);
             Ok(cmd)
         }
-        "checkpoint_mode" => {
+        "agent_aspect_mode" | "checkpoint_mode" => {
             let mode = input
                 .get("mode")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| "checkpoint_mode requires 'mode' in input".to_string())?;
-            let mut cmd = std::process::Command::new("checkpoint");
+                .ok_or_else(|| "agent_aspect_mode requires 'mode' in input".to_string())?;
+            let mut cmd = std::process::Command::new("agent-aspect");
             cmd.args(["mode", mode]);
             cmd.current_dir(&home);
             Ok(cmd)
@@ -739,7 +742,7 @@ impl LogWriter {
         let now = chrono::Utc::now().to_rfc3339();
         if let Ok(store) = AuditStore::open(&self.db_path) {
             if let Err(e) = store.insert_job_log(&self.job_id, stream, chunk, self.seq, &now) {
-                eprintln!("checkpoint-bridge: job {}: log write: {e}", self.job_id);
+                eprintln!("agent-aspect-bridge: job {}: log write: {e}", self.job_id);
             }
         }
         self.seq += 1;
@@ -781,7 +784,7 @@ impl LogWriter {
         let now = chrono::Utc::now().to_rfc3339();
         if let Ok(store) = AuditStore::open(&self.db_path) {
             if let Err(e) = store.insert_job_log(&self.job_id, "system", chunk, self.seq, &now) {
-                eprintln!("checkpoint-bridge: job {}: log write: {e}", self.job_id);
+                eprintln!("agent-aspect-bridge: job {}: log write: {e}", self.job_id);
             }
         }
         self.seq += 1;
@@ -921,7 +924,7 @@ fn exec_job(
     let store = match AuditStore::open(db_path) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("checkpoint-bridge: job {job_id}: open db: {e}");
+            eprintln!("agent-aspect-bridge: job {job_id}: open db: {e}");
             return;
         }
     };
@@ -938,13 +941,13 @@ fn exec_job(
         Ok(0) => {
             // Job was cancelled or terminal before worker got to it — do not execute
             eprintln!(
-                "checkpoint-bridge: job {job_id}: already cancelled/terminal, skipping execution"
+                "agent-aspect-bridge: job {job_id}: already cancelled/terminal, skipping execution"
             );
             return;
         }
         Ok(_) => {}
         Err(e) => {
-            eprintln!("checkpoint-bridge: job {job_id}: mark started: {e}");
+            eprintln!("agent-aspect-bridge: job {job_id}: mark started: {e}");
             return;
         }
     }
@@ -984,8 +987,8 @@ fn exec_job(
                 "failed to spawn: {e}\n\
                  provider binary: {program}\n\
                  PATH: {path_env}\n\
-                 hint: Configure provider_binaries.<name> in ~/.checkpoint/config.toml \
-                 or ensure the binary directory is visible to checkpoint-bridge"
+                 hint: Configure provider_binaries.<name> in ~/.agent-aspect/config.toml \
+                 or ensure the binary directory is visible to agent-aspect-bridge"
             );
             let _ = store.update_job_finished_with_reason(
                 job_id,
@@ -1172,7 +1175,7 @@ fn exec_job(
                 std::thread::sleep(Duration::from_millis(50));
             }
             Err(e) => {
-                eprintln!("checkpoint-bridge: job {job_id}: wait: {e}");
+                eprintln!("agent-aspect-bridge: job {job_id}: wait: {e}");
                 break;
             }
         }
@@ -1280,7 +1283,7 @@ fn bind_provider_conversation(job_id: &str, db_path: &PathBuf) {
     let store = match AuditStore::open(db_path) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("checkpoint-bridge: job {job_id}: bind conversation open db: {e}");
+            eprintln!("agent-aspect-bridge: job {job_id}: bind conversation open db: {e}");
             return;
         }
     };
@@ -1288,7 +1291,7 @@ fn bind_provider_conversation(job_id: &str, db_path: &PathBuf) {
         Ok(Some(j)) => j,
         Ok(None) => return,
         Err(e) => {
-            eprintln!("checkpoint-bridge: job {job_id}: bind conversation query job: {e}");
+            eprintln!("agent-aspect-bridge: job {job_id}: bind conversation query job: {e}");
             return;
         }
     };
@@ -1334,7 +1337,7 @@ fn bind_provider_conversation(job_id: &str, db_path: &PathBuf) {
         Some(&title),
         Some("first_prompt"),
     ) {
-        eprintln!("checkpoint-bridge: job {job_id}: upsert provider conversation: {e}");
+        eprintln!("agent-aspect-bridge: job {job_id}: upsert provider conversation: {e}");
         return;
     }
     let mut identity = probe_identity(provider, job.project_path.as_deref());
@@ -1369,7 +1372,7 @@ fn bind_recent_unbound_provider_conversations(db_path: &PathBuf) {
     let jobs = match store.list_jobs(100, 0, None) {
         Ok(j) => j,
         Err(e) => {
-            eprintln!("checkpoint-bridge: list unbound provider jobs failed: {e}");
+            eprintln!("agent-aspect-bridge: list unbound provider jobs failed: {e}");
             return;
         }
     };
@@ -1819,12 +1822,12 @@ pub fn handle_post_jobs(
         }
     }
 
-    // Validate checkpoint_mode input
-    if kind == "checkpoint_mode" {
+    // Validate Agent Aspect mode input（兼容旧 kind）。
+    if kind == "agent_aspect_mode" || kind == "checkpoint_mode" {
         if input.get("mode").and_then(|v| v.as_str()).is_none() {
             return json_response(
                 400,
-                &serde_json::json!({"error": "checkpoint_mode requires 'mode' in input"}),
+                &serde_json::json!({"error": "agent_aspect_mode requires 'mode' in input"}),
             );
         }
     }

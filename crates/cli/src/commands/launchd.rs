@@ -1,4 +1,4 @@
-//! `checkpoint launchd` — 管理 macOS launchd 服务集成。
+//! `agent-aspect launchd` — 管理 macOS launchd 服务集成。
 //!
 //! 通过生成 plist + launchctl bootstrap/bootout 实现 daemon 的开机自启。
 //! plist 中设置 `RunAtLoad` + `KeepAlive` 保证 daemon 持续运行。
@@ -9,7 +9,7 @@ use checkpoint_core::paths;
 use super::helpers::{bin_dir, run_launchctl};
 
 /// launchd 服务标识，对应 plist 文件名和 Label 键。
-pub const PLIST_LABEL: &str = "com.checkpoint.daemon";
+pub const PLIST_LABEL: &str = "com.agent-aspect.daemon";
 
 /// launchd 子命令入口。
 ///
@@ -22,7 +22,7 @@ pub fn cmd_launchd(sub: Option<&str>) {
         Some("uninstall") => launchd_uninstall(),
         Some("status") => launchd_status(),
         _ => {
-            eprintln!("usage: checkpoint launchd <install|uninstall|status>");
+            eprintln!("usage: agent-aspect launchd <install|uninstall|status>");
             std::process::exit(1);
         }
     }
@@ -31,7 +31,7 @@ pub fn cmd_launchd(sub: Option<&str>) {
 /// 生成 launchd plist 并 bootstrap 服务。
 ///
 /// 流程：
-/// 1. 定位 checkpointd 绝对路径（canonicalize 解析符号链接）
+/// 1. 定位 agent-aspectd 绝对路径（canonicalize 解析符号链接）
 /// 2. 写 plist 到 ~/Library/LaunchAgents/
 /// 3. launchctl bootstrap gui/<uid> <plist>
 ///
@@ -39,14 +39,19 @@ pub fn cmd_launchd(sub: Option<&str>) {
 fn launchd_install() {
     let plist_path = paths::launchd_plist_path();
 
-    // 找到 checkpointd 绝对路径
+    // 找到 agent-aspectd 绝对路径
     let Some(dir) = bin_dir() else {
         eprintln!("FAIL: cannot determine binary directory");
         std::process::exit(1);
     };
-    let daemon_bin = dir.join("checkpointd");
+    let daemon_bin = dir.join("agent-aspectd");
+    let daemon_bin = if daemon_bin.exists() {
+        daemon_bin
+    } else {
+        dir.join("checkpointd")
+    };
     if !daemon_bin.exists() {
-        eprintln!("FAIL: checkpointd not found at {}", daemon_bin.display());
+        eprintln!("FAIL: agent-aspectd not found at {}", daemon_bin.display());
         std::process::exit(1);
     }
     let daemon_abs = daemon_bin.canonicalize().unwrap_or(daemon_bin);

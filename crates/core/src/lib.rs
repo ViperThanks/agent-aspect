@@ -14,6 +14,7 @@ pub mod config;
 pub mod constants;
 pub mod conversation;
 pub mod decision;
+pub mod env_compat;
 pub mod error;
 pub mod event;
 pub mod learn;

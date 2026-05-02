@@ -3,7 +3,7 @@
 # 测试 Claude/Kimi/Codex agent_prompt new + resume
 set -euo pipefail
 
-TOKEN=$(cat ~/.checkpoint/bridge.token 2>/dev/null || true)
+TOKEN=$(cat ~/.agent-aspect/bridge.token 2>/dev/null || true)
 if [ -z "$TOKEN" ]; then
     echo "FAIL: no bridge token found"
     exit 1
@@ -45,7 +45,7 @@ FAILED=0
 echo "=== test 1: Claude agent_prompt (new session) ==="
 RESP=$(curl -s -X POST \
     -H "$AUTH" -H "Content-Type: application/json" \
-    -d "{\"kind\":\"agent_prompt\",\"provider\":\"claude_code\",\"project_path\":\"$PROJECT\",\"prompt\":\"echo hello from checkpoint test\"}" \
+    -d "{\"kind\":\"agent_prompt\",\"provider\":\"claude_code\",\"project_path\":\"$PROJECT\",\"prompt\":\"echo hello from agent-aspect test\"}" \
     "$API/jobs")
 JOB_ID=$(echo "$RESP" | python3 -c "import json,sys; print(json.load(sys.stdin).get('job_id',''))" 2>/dev/null)
 if [ -n "$JOB_ID" ]; then
@@ -122,7 +122,7 @@ echo ""
 echo "=== test 3: Kimi agent_prompt (new session) ==="
 RESP=$(curl -s -X POST \
     -H "$AUTH" -H "Content-Type: application/json" \
-    -d "{\"kind\":\"agent_prompt\",\"provider\":\"kimi_code\",\"project_path\":\"$PROJECT\",\"prompt\":\"echo hello from checkpoint\"}" \
+    -d "{\"kind\":\"agent_prompt\",\"provider\":\"kimi_code\",\"project_path\":\"$PROJECT\",\"prompt\":\"echo hello from agent-aspect\"}" \
     "$API/jobs")
 JOB_ID=$(echo "$RESP" | python3 -c "import json,sys; print(json.load(sys.stdin).get('job_id',''))" 2>/dev/null)
 if [ -n "$JOB_ID" ]; then

@@ -87,7 +87,7 @@ async fn handle_ws(socket: WebSocket, state: Arc<crate::AppState>) {
                         "pong" => { /* 心跳确认，无需处理 */ }
                         other => {
                             eprintln!(
-                                "checkpoint-relay: unknown WS frame type '{other}' from sid {}...",
+                                "agent-aspect-relay: unknown WS frame type '{other}' from sid {}...",
                                 &token[..8.min(token.len())]
                             );
                             // 不断开连接，但记录告警。Bridge 可能是旧版本，断开会导致服务中断。
@@ -150,7 +150,7 @@ async fn handle_ws(socket: WebSocket, state: Arc<crate::AppState>) {
         _ = read_task => {},
         _ = write_task => {},
         _ = shutdown_rx => {
-            eprintln!("checkpoint-relay: session kicked for sid {}...", &token_write[..8.min(token_write.len())]);
+            eprintln!("agent-aspect-relay: session kicked for sid {}...", &token_write[..8.min(token_write.len())]);
         },
     }
 
@@ -219,7 +219,7 @@ async fn wait_for_register(
 
     // sid 必须在已注册名册中（防止已注销的 token 建立 WS）
     if !state.registered_tokens.lock().await.contains_key(&sid) {
-        eprintln!("checkpoint-relay: WS register rejected — sid not registered");
+        eprintln!("agent-aspect-relay: WS register rejected — sid not registered");
         send_error(ws_sink, "sid_not_registered").await;
         let _ = ws_sink.close().await;
         return None;

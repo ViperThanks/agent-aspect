@@ -31,16 +31,16 @@ fn main() {
         ),
         "conversations" => cmd_conversations(args.get(2).map(|s| s.as_str())),
         "help" | "--help" | "-h" => {
-            println!("checkpoint — AI agent behavior monitor");
+            println!("agent-aspect — AI agent behavior monitor");
             println!();
-            println!("Usage: checkpoint <command>");
+            println!("Usage: agent-aspect <command>");
             println!();
             println!("Commands:");
             println!("  status    Show daemon status and event counts");
             println!("  rules     List active default rules");
             println!("  audit     Show recent audit entries");
             println!("  mode      Show or set daemon mode (observer|autonomous|guard|paranoid)");
-            println!("  doctor    Run health checks on checkpoint installation");
+            println!("  doctor    Run health checks on Agent Aspect installation");
             println!("  init      Install verified agent hook configuration");
             println!("  daemon    Manage daemon process (start|stop|restart|status)");
             println!("  launchd   Manage macOS launchd integration (install|uninstall|status)");
@@ -51,7 +51,7 @@ fn main() {
         }
         _ => {
             eprintln!("unknown command: {subcommand}");
-            eprintln!("run 'checkpoint help' for usage");
+            eprintln!("run 'agent-aspect help' for usage");
             std::process::exit(1);
         }
     }

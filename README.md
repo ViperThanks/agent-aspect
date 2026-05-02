@@ -6,7 +6,7 @@
 
 Agent Aspect is a local runtime control plane for AI coding agents. It sits in front of tools such as Claude Code, Codex CLI, and Kimi Code, observes tool calls, applies local policy, records an audit trail, and gives the user a control plane for approvals, conversations, jobs, and learned-rule suggestions.
 
-![Agent Aspect bridge overview](docs/assets/checkpoint-bridge-overview.png)
+![Agent Aspect bridge overview](docs/assets/agent-aspect-bridge-overview.png)
 
 ## What It Does
 
@@ -29,16 +29,16 @@ AI Agents
   └─ Kimi Code hooks
         │
         ▼
-checkpoint-hook ── Unix socket ── checkpointd
+agent-aspect-hook ── Unix socket ── agent-aspectd
         │                           │
         │                           ├─ Rule engine
         │                           ├─ Learned-rule fallback
         │                           └─ SQLite audit.db
         │
         ▼
-checkpoint-bridge ── HTTP + token ── Web / mobile browser
+agent-aspect-bridge ── HTTP + token ── Web / mobile browser
         │
-        └──── WSS ── checkpoint-relay ── Phone browser  (optional)
+        └──── WSS ── agent-aspect-relay ── Phone browser  (optional)
 ```
 
 Core product rule:
@@ -51,7 +51,7 @@ Core product rule:
 |------|-------------|
 | **Local only** | Default. Daemon + bridge run on your Mac. Phone accesses bridge over LAN. |
 | **LAN / Tailscale** | Phone and Mac on the same network or Tailscale mesh. No relay needed. |
-| **Self-hosted relay** | Phone is on a different network (e.g. mobile data). You run `checkpoint-relay` on a VPS you control. |
+| **Self-hosted relay** | Phone is on a different network (e.g. mobile data). You run `agent-aspect-relay` on a VPS you control. |
 
 Relay is an optional remote phone channel. It is not a default dependency, not cloud sync, not an account system, and not a multi-tenant SaaS. See [docs/relay.md](docs/relay.md) for details.
 
@@ -79,19 +79,19 @@ cargo install --path crates/hook-cli
 cargo install --path crates/bridge
 
 # Initialize config
-checkpoint init
+agent-aspect init
 
 # Run the doctor to verify your setup
-checkpoint doctor
+agent-aspect doctor
 
 # Start the daemon (background, listens on Unix socket)
-checkpoint daemon start
+agent-aspect daemon start
 
 # Start the bridge (token-protected HTTP UI)
-checkpoint bridge start
+agent-aspect bridge start
 
 # Get the bridge token for browser access
-checkpoint bridge token
+agent-aspect bridge token
 
 # Open the bridge UI in your browser
 open http://127.0.0.1:7676
@@ -101,16 +101,16 @@ open http://127.0.0.1:7676
 
 ```bash
 # Observer: log everything, block nothing
-checkpoint mode observer
+agent-aspect mode observer
 
 # Autonomous: auto-allow safe calls, ask on risky ones
-checkpoint mode autonomous
+agent-aspect mode autonomous
 
 # Guard: ask before most write operations
-checkpoint mode guard
+agent-aspect mode guard
 
 # Paranoid: ask before everything
-checkpoint mode paranoid
+agent-aspect mode paranoid
 ```
 
 ### Build and run the relay (optional)
@@ -120,7 +120,7 @@ checkpoint mode paranoid
 cargo install --path crates/relay
 
 # Run on your VPS (or locally for testing)
-checkpoint-relay
+agent-aspect-relay
 ```
 
 See [docs/relay.md](docs/relay.md) for pairing and deployment.
@@ -138,11 +138,11 @@ scripts/relay_smoke_test.sh
 Useful local commands:
 
 ```bash
-checkpoint doctor
-checkpoint mode guard
-checkpoint bridge start
-checkpoint bridge status
-checkpoint bridge token
+agent-aspect doctor
+agent-aspect mode guard
+agent-aspect bridge start
+agent-aspect bridge status
+agent-aspect bridge token
 ```
 
 ## Repository Layout
@@ -152,7 +152,7 @@ crates/
   core/       Shared types, SQLite audit store, rule engine, normalization, transcripts
   daemon/     Unix-socket daemon that evaluates hook requests
   hook-cli/   Agent hook entrypoint
-  cli/        checkpoint command-line management tool
+  cli/        agent-aspect command-line management tool
   bridge/     Token-protected HTTP bridge and embedded web UI
   relay/      User-owned VPS relay for phone access to the Mac bridge
   shared_ui/  Shared frontend primitives used by bridge and relay
@@ -173,7 +173,7 @@ scripts/      Smoke tests for core and bridge flows
 ## Security Model
 
 - **Trust anchor is your Mac.** The daemon, rule engine, and audit store all run locally.
-- The bridge token is generated locally and stored under `~/.checkpoint/bridge.token`.
+- The bridge token is generated locally and stored under `~/.agent-aspect/bridge.token`.
 - All bridge API endpoints require Bearer token auth except `GET /health`.
 - Bridge CORS is intentionally not enabled by default.
 - Jobs are restricted to whitelisted kinds and known project paths.

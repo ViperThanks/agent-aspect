@@ -36,14 +36,14 @@ pub fn load_or_create_token() -> String {
             Ok(mut f) => {
                 f.write_all(token.as_bytes()).expect("write token");
                 eprintln!(
-                    "checkpoint-bridge: generated new token at {}",
+                    "agent-aspect-bridge: generated new token at {}",
                     token_path.display()
                 );
                 return token;
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {} // 文件已存在，继续读取
             Err(e) => {
-                eprintln!("checkpoint-bridge: create token file failed: {e}");
+                eprintln!("agent-aspect-bridge: create token file failed: {e}");
                 std::process::exit(1);
             }
         }
@@ -58,14 +58,14 @@ pub fn load_or_create_token() -> String {
             Ok(mut f) => {
                 f.write_all(token.as_bytes()).expect("write token");
                 eprintln!(
-                    "checkpoint-bridge: generated new token at {}",
+                    "agent-aspect-bridge: generated new token at {}",
                     token_path.display()
                 );
                 return token;
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(e) => {
-                eprintln!("checkpoint-bridge: create token file failed: {e}");
+                eprintln!("agent-aspect-bridge: create token file failed: {e}");
                 std::process::exit(1);
             }
         }
@@ -75,7 +75,7 @@ pub fn load_or_create_token() -> String {
     match std::fs::read_to_string(&token_path) {
         Ok(t) => t.trim().to_string(),
         Err(e) => {
-            eprintln!("checkpoint-bridge: read existing token failed: {e}");
+            eprintln!("agent-aspect-bridge: read existing token failed: {e}");
             std::process::exit(1);
         }
     }
@@ -104,7 +104,7 @@ pub fn delete_relay_token_files() {
     let client_path = paths::relay_client_token_path();
     let _ = std::fs::remove_file(&mac_path);
     let _ = std::fs::remove_file(&client_path);
-    eprintln!("checkpoint-bridge: deleted stale relay token files");
+    eprintln!("agent-aspect-bridge: deleted stale relay token files");
 }
 
 /// 确保 relay token 可用，必要时自动注册。
@@ -136,14 +136,14 @@ pub fn ensure_relay_tokens(relay_url: &str) -> Result<RelayTokens, String> {
 
     // 损坏对（只有一个文件存在）— 清理后重新注册
     if mac_exists || client_exists {
-        eprintln!("checkpoint-bridge: corrupt relay token pair — re-registering");
+        eprintln!("agent-aspect-bridge: corrupt relay token pair — re-registering");
         let _ = std::fs::remove_file(&mac_path);
         let _ = std::fs::remove_file(&client_path);
     }
 
     // 需要注册 — 加载 setup_token
     let setup_token = load_setup_token().ok_or_else(|| {
-        "missing relay tokens; set CHECKPOINT_RELAY_SETUP_TOKEN once or write ~/.checkpoint/relay.setup_token".to_string()
+        "missing relay tokens; set AGENT_ASPECT_RELAY_SETUP_TOKEN once or write relay.setup_token".to_string()
     })?;
 
     // 从 relay WebSocket URL 推导注册 HTTP URL
@@ -198,7 +198,7 @@ pub fn ensure_relay_tokens(relay_url: &str) -> Result<RelayTokens, String> {
     }
 
     eprintln!(
-        "checkpoint-bridge: relay registered (sid={})",
+        "agent-aspect-bridge: relay registered (sid={})",
         data["sid"].as_str().unwrap_or("?")
     );
 
@@ -209,9 +209,12 @@ pub fn ensure_relay_tokens(relay_url: &str) -> Result<RelayTokens, String> {
 }
 
 /// 从环境变量或文件加载 relay 一次性注册令牌。
-/// 环境变量 CHECKPOINT_RELAY_SETUP_TOKEN 优先于文件。
+/// 环境变量 AGENT_ASPECT_RELAY_SETUP_TOKEN / CHECKPOINT_RELAY_SETUP_TOKEN 优先于文件。
 fn load_setup_token() -> Option<String> {
-    if let Ok(t) = std::env::var("CHECKPOINT_RELAY_SETUP_TOKEN") {
+    if let Some(t) = checkpoint_core::env_compat::env_var(
+        "AGENT_ASPECT_RELAY_SETUP_TOKEN",
+        "CHECKPOINT_RELAY_SETUP_TOKEN",
+    ) {
         return Some(t);
     }
     let path = paths::relay_setup_token_path();

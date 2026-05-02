@@ -1,4 +1,4 @@
-//! `checkpoint daemon` — 管理 checkpointd daemon 进程的生命周期。
+//! `agent-aspect daemon` — 管理 agent-aspectd daemon 进程的生命周期。
 //!
 //! daemon 是核心 IPC 服务：接收 hook 请求 → normalize → rule engine 裁决 → 审计。
 //! 本模块提供 start/stop/restart/status 四个子命令。
@@ -9,7 +9,7 @@ use checkpoint_core::{paths, process_guard};
 
 use super::helpers::bin_dir;
 
-/// Daemon 运行时状态，从 `~/.checkpoint/state.json` 反序列化。
+/// Daemon 运行时状态，从 `~/.agent-aspect/state.json` 反序列化。
 #[derive(serde::Deserialize)]
 struct DaemonState {
     pid: u32,
@@ -27,7 +27,7 @@ pub fn cmd_daemon(sub: Option<&str>) {
         Some("restart") => daemon_restart(),
         Some("status") => daemon_status(),
         _ => {
-            eprintln!("usage: checkpoint daemon <start|stop|restart|status>");
+            eprintln!("usage: agent-aspect daemon <start|stop|restart|status>");
             std::process::exit(1);
         }
     }
@@ -47,11 +47,11 @@ fn load_state() -> Option<DaemonState> {
 ///
 /// 流程：
 /// 1. 先用 process_guard 清理可能残留的旧进程
-/// 2. 定位 checkpointd 二进制（与当前 CLI 同目录）
+/// 2. 定位 agent-aspectd 二进制（与当前 CLI 同目录）
 /// 3. spawn 后等待 500ms 让 daemon 写 state 文件
 /// 4. 验证进程仍然存活
 fn daemon_start() {
-    match process_guard::stop_existing(&paths::state_path(), "checkpointd") {
+    match process_guard::stop_existing(&paths::state_path(), "agent-aspectd") {
         process_guard::StopResult::Stopped(pid) => {
             println!("replaced previous daemon (pid {pid})");
         }
@@ -65,9 +65,14 @@ fn daemon_start() {
         eprintln!("FAIL: cannot determine binary directory");
         std::process::exit(1);
     };
-    let daemon_bin = dir.join("checkpointd");
+    let daemon_bin = dir.join("agent-aspectd");
+    let daemon_bin = if daemon_bin.exists() {
+        daemon_bin
+    } else {
+        dir.join("checkpointd")
+    };
     if !daemon_bin.exists() {
-        eprintln!("FAIL: checkpointd not found at {}", daemon_bin.display());
+        eprintln!("FAIL: agent-aspectd not found at {}", daemon_bin.display());
         std::process::exit(1);
     }
 
@@ -80,7 +85,7 @@ fn daemon_start() {
     let child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("FAIL: spawn checkpointd: {e}");
+            eprintln!("FAIL: spawn agent-aspectd: {e}");
             std::process::exit(1);
         }
     };
@@ -101,7 +106,7 @@ fn daemon_start() {
 /// 停止 daemon 进程。
 /// 通过 `process_guard::stop_existing` 完成（它处理了 pid 验证和 state 清理）。
 fn daemon_stop() {
-    match process_guard::stop_existing(&paths::state_path(), "checkpointd") {
+    match process_guard::stop_existing(&paths::state_path(), "agent-aspectd") {
         process_guard::StopResult::Stopped(pid) => println!("daemon stopped (pid {pid})"),
         process_guard::StopResult::NotFound => println!("daemon not running (no state file)"),
         process_guard::StopResult::StaleState => {

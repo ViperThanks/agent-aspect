@@ -27,16 +27,16 @@ AI Agents
   └─ Kimi Code hooks
         │
         ▼
-checkpoint-hook ── Unix socket ── checkpointd
+agent-aspect-hook ── Unix socket ── agent-aspectd
         │                           │
         │                           ├─ Rule engine
         │                           ├─ Learned-rule fallback
         │                           └─ SQLite audit.db
         │
         ▼
-checkpoint-bridge ── HTTP + token ── Web / mobile browser
+agent-aspect-bridge ── HTTP + token ── Web / mobile browser
         │
-        └──── WSS ── checkpoint-relay ── Phone browser  (optional)
+        └──── WSS ── agent-aspect-relay ── Phone browser  (optional)
 ```
 
 核心产品原则：
@@ -49,7 +49,7 @@ checkpoint-bridge ── HTTP + token ── Web / mobile browser
 |------|----------|
 | **本机模式** | 默认。daemon + bridge 跑在 Mac 上，手机可通过 LAN 访问。 |
 | **LAN / Tailscale** | 手机和 Mac 在同一网络或 Tailscale mesh 中，不需要 relay。 |
-| **自托管 relay** | 手机在移动网络、Mac 在另一个网络。你在自己的 VPS 上运行 `checkpoint-relay`。 |
+| **自托管 relay** | 手机在移动网络、Mac 在另一个网络。你在自己的 VPS 上运行 `agent-aspect-relay`。 |
 
 Relay 是可选的远程手机通道。它不是默认依赖，不是云同步，不是账号系统，也不是多租户 SaaS。详见 [docs/relay.md](docs/relay.md)。
 
@@ -77,19 +77,19 @@ cargo install --path crates/hook-cli
 cargo install --path crates/bridge
 
 # 初始化配置
-checkpoint init
+agent-aspect init
 
 # 检查环境
-checkpoint doctor
+agent-aspect doctor
 
 # 启动 daemon（后台 Unix socket 服务）
-checkpoint daemon start
+agent-aspect daemon start
 
 # 启动 bridge（token 保护的 HTTP UI）
-checkpoint bridge start
+agent-aspect bridge start
 
 # 获取浏览器访问 token
-checkpoint bridge token
+agent-aspect bridge token
 
 # 打开 bridge UI
 open http://127.0.0.1:7676
@@ -99,16 +99,16 @@ open http://127.0.0.1:7676
 
 ```bash
 # Observer：只记录，不阻断
-checkpoint mode observer
+agent-aspect mode observer
 
 # Autonomous：安全动作自动允许，高风险动作询问
-checkpoint mode autonomous
+agent-aspect mode autonomous
 
 # Guard：大多数写操作前询问
-checkpoint mode guard
+agent-aspect mode guard
 
 # Paranoid：所有操作前询问
-checkpoint mode paranoid
+agent-aspect mode paranoid
 ```
 
 ### 构建并运行 relay（可选）
@@ -118,7 +118,7 @@ checkpoint mode paranoid
 cargo install --path crates/relay
 
 # 在 VPS 上运行，或本机测试
-checkpoint-relay
+agent-aspect-relay
 ```
 
 配对和部署见 [docs/relay.md](docs/relay.md)。
@@ -136,11 +136,11 @@ scripts/relay_smoke_test.sh
 常用本地命令：
 
 ```bash
-checkpoint doctor
-checkpoint mode guard
-checkpoint bridge start
-checkpoint bridge status
-checkpoint bridge token
+agent-aspect doctor
+agent-aspect mode guard
+agent-aspect bridge start
+agent-aspect bridge status
+agent-aspect bridge token
 ```
 
 ## 目录结构
@@ -150,7 +150,7 @@ crates/
   core/       共享类型、SQLite 审计存储、规则引擎、normalization、transcripts
   daemon/     评估 hook 请求的 Unix socket daemon
   hook-cli/   Agent hook 入口
-  cli/        checkpoint 命令行管理工具
+  cli/        agent-aspect 命令行管理工具
   bridge/     token 保护的 HTTP bridge 和内嵌 Web UI
   relay/      用于手机访问 Mac bridge 的自托管 relay
   shared_ui/  bridge 和 relay 共用的前端基础模块
@@ -171,7 +171,7 @@ scripts/      core / bridge / relay 冒烟测试
 ## 安全模型
 
 - **信任锚点在你的 Mac。** daemon、规则引擎和审计库都在本地运行。
-- Bridge token 本地生成，并存储在 `~/.checkpoint/bridge.token`。
+- Bridge token 本地生成，并存储在 `~/.agent-aspect/bridge.token`。
 - 除 `GET /health` 外，所有 bridge API 都需要 Bearer token。
 - Bridge 默认不启用 CORS。
 - Job 只允许白名单类型和已知 project path。

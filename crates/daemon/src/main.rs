@@ -1,4 +1,4 @@
-//! Checkpoint 守护进程 — 通过 Unix socket 接收 hook 请求，执行规则引擎判定。
+//! Agent Aspect 守护进程 — 通过 Unix socket 接收 hook 请求，执行规则引擎判定。
 //!
 //! 职责：
 //! - 监听 Unix socket，接收 hook-cli 发来的工具使用审核请求。
@@ -6,7 +6,7 @@
 //! - 支持 Override 请求（用户交互式覆盖判定结果）。
 //! - 支持 Metadata 请求（会话元数据采集，用于 UI 展示）。
 //!
-//! 架构角色：Checkpoint 安全防线的服务端。hook-cli 是无状态的薄客户端，
+//! 架构角色：Agent Aspect 安全防线的服务端。hook-cli 是无状态的薄客户端，
 //! 所有规则判定和审计逻辑都在此守护进程中执行，确保策略一致性。
 //!
 //! 不变量：
@@ -48,7 +48,7 @@ fn log_init() {
         }
         Err(e) => {
             eprintln!(
-                "checkpointd: cannot open log file {}: {e}",
+                "agent-aspectd: cannot open log file {}: {e}",
                 log_path.display()
             );
         }
@@ -65,11 +65,11 @@ fn log_msg(msg: &str) {
     if let Some(mut f) = guard.as_ref() {
         if let Err(e) = f.write_all(line.as_bytes()) {
             drop(guard);
-            eprintln!("checkpointd: log write failed: {e}");
+            eprintln!("agent-aspectd: log write failed: {e}");
         }
     } else {
         drop(guard);
-        eprintln!("checkpointd: {msg}");
+        eprintln!("agent-aspectd: {msg}");
     }
 }
 
@@ -99,9 +99,8 @@ fn resolve_mode() -> Mode {
         return cfg.mode;
     }
 
-    // fallback: CHECKPOINT_MODE env
-    std::env::var("CHECKPOINT_MODE")
-        .ok()
+    // fallback: AGENT_ASPECT_MODE / CHECKPOINT_MODE env
+    checkpoint_core::env_compat::env_var("AGENT_ASPECT_MODE", "CHECKPOINT_MODE")
         .and_then(|raw| raw.parse::<Mode>().ok())
         .unwrap_or(Mode::Guard)
 }
@@ -153,7 +152,8 @@ fn handle_client(mut stream: UnixStream, store: &AuditStore, engine: &RuleEngine
         } => {
             let device_id = device_id.unwrap_or_else(|| "local-hook".to_string());
             let now = chrono::Utc::now().to_rfc3339();
-            if let Err(e) = store.register_device(&device_id, Some("checkpoint-hook"), None, &now) {
+            if let Err(e) = store.register_device(&device_id, Some("agent-aspect-hook"), None, &now)
+            {
                 log_info!("register device failed: {e}");
             }
 
@@ -333,7 +333,7 @@ fn handle_override(
 ) {
     let now = chrono::Utc::now().to_rfc3339();
     let device_id = device_id.unwrap_or("local-hook");
-    if let Err(e) = store.register_device(device_id, Some("checkpoint-hook"), None, &now) {
+    if let Err(e) = store.register_device(device_id, Some("agent-aspect-hook"), None, &now) {
         log_info!("register override device failed: {e}");
     }
     if let Err(e) = store.insert_decision_for_device(
@@ -378,7 +378,8 @@ fn main() {
 
     // 单例守卫：杀掉已运行的旧 daemon 实例
     let state_path = paths::state_path();
-    if let Some(old_pid) = checkpoint_core::process_guard::kill_existing(&state_path, "checkpointd")
+    if let Some(old_pid) =
+        checkpoint_core::process_guard::kill_existing(&state_path, "agent-aspectd")
     {
         log_info!("replaced previous daemon (pid {old_pid})");
     }

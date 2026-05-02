@@ -1,4 +1,4 @@
-//! Checkpoint Hook CLI — Agent 工具使用拦截的入口点。
+//! Agent Aspect Hook CLI — Agent 工具使用拦截的入口点。
 //!
 //! 职责：
 //! - 从 stdin 读取 hook payload，检测 agent 类型（Claude/Codex/Kimi/Gemini）。
@@ -36,7 +36,7 @@ fn main() {
     let mut stream = match UnixStream::connect(&sock_path) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("checkpoint-hook: daemon not reachable: {e}");
+            eprintln!("agent-aspect-hook: daemon not reachable: {e}");
             // daemon not running -> allow by default, no output
             return;
         }
@@ -63,14 +63,14 @@ fn main() {
     let body = match serde_json::to_vec(&request) {
         Ok(body) => body,
         Err(e) => {
-            eprintln!("checkpoint-hook: wire serialize failed: {e}");
+            eprintln!("agent-aspect-hook: wire serialize failed: {e}");
             return;
         }
     };
 
     // 写入请求并 shutdown 写端，通知 daemon 请求已完整
     if let Err(e) = stream.write_all(&body) {
-        eprintln!("checkpoint-hook: ipc write failed: {e}");
+        eprintln!("agent-aspect-hook: ipc write failed: {e}");
         return;
     }
     stream.shutdown(std::net::Shutdown::Write).ok();
@@ -82,7 +82,7 @@ fn main() {
             let internal: WireResponse = match serde_json::from_str(&resp) {
                 Ok(response) => response,
                 Err(e) => {
-                    eprintln!("checkpoint-hook: wire parse failed: {e}");
+                    eprintln!("agent-aspect-hook: wire parse failed: {e}");
                     return;
                 }
             };
@@ -103,7 +103,7 @@ fn main() {
             }
         }
         Err(e) => {
-            eprintln!("checkpoint-hook: ipc read failed: {e}");
+            eprintln!("agent-aspect-hook: ipc read failed: {e}");
         }
     }
 }
@@ -138,13 +138,15 @@ fn detect_agent(payload: &str) -> AgentId {
     };
 
     // 1. 显式环境变量（只接受已支持的 agent）
-    if let Ok(val) = std::env::var("CHECKPOINT_AGENT") {
+    if let Some(val) =
+        checkpoint_core::env_compat::env_var("AGENT_ASPECT_AGENT", "CHECKPOINT_AGENT")
+    {
         if let Ok(agent) = AgentId::from_str(&val) {
             if supported(agent) {
                 return agent;
             }
             eprintln!(
-                "checkpoint-hook: CHECKPOINT_AGENT={val} not yet supported, falling back to heuristic"
+                "agent-aspect-hook: AGENT_ASPECT_AGENT={val} not yet supported, falling back to heuristic"
             );
         }
     }
@@ -183,7 +185,7 @@ fn emit_hook_response(action: Action, note: &str) {
     if let Some(out) = HookResponse::from_action(action, note.to_string()) {
         match serde_json::to_string(&out) {
             Ok(body) => println!("{body}"),
-            Err(e) => eprintln!("checkpoint-hook: hook response serialize failed: {e}"),
+            Err(e) => eprintln!("agent-aspect-hook: hook response serialize failed: {e}"),
         }
     }
 }
@@ -198,11 +200,11 @@ fn emit_hook_response(action: Action, note: &str) {
 fn handle_interactive(action: Action, note: &str, event_id: Option<&str>) {
     match action {
         Action::Allow => {
-            println!("[checkpoint] allowed.");
+            println!("[agent-aspect] allowed.");
         }
         Action::Deny => {
-            eprintln!("[checkpoint] DENIED: {note}");
-            eprintln!("[checkpoint] Override? [y/N] ");
+            eprintln!("[agent-aspect] DENIED: {note}");
+            eprintln!("[agent-aspect] Override? [y/N] ");
             if read_yes_tty() {
                 send_override(
                     event_id,
@@ -210,15 +212,15 @@ fn handle_interactive(action: Action, note: &str, event_id: Option<&str>) {
                     Action::Allow,
                     "user override: deny -> allow",
                 );
-                println!("[checkpoint] overridden to allow.");
+                println!("[agent-aspect] overridden to allow.");
             } else {
                 // 保持 deny，审计已记录原始判定
                 emit_hook_response(Action::Deny, note);
             }
         }
         Action::Ask => {
-            eprintln!("[checkpoint] ASK: {note}");
-            eprintln!("[checkpoint] Proceed? [y/N] ");
+            eprintln!("[agent-aspect] ASK: {note}");
+            eprintln!("[agent-aspect] Proceed? [y/N] ");
             if read_yes_tty() {
                 send_override(
                     event_id,
@@ -238,7 +240,7 @@ fn handle_interactive(action: Action, note: &str, event_id: Option<&str>) {
             }
         }
         _ => {
-            println!("[checkpoint] allowed.");
+            println!("[agent-aspect] allowed.");
         }
     }
 }
@@ -253,7 +255,7 @@ fn send_override(
     note: &str,
 ) {
     let Some(event_id) = event_id else {
-        eprintln!("checkpoint-hook: override skipped: missing event_id");
+        eprintln!("agent-aspect-hook: override skipped: missing event_id");
         return;
     };
 
@@ -261,7 +263,7 @@ fn send_override(
     let mut stream = match UnixStream::connect(&sock_path) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("checkpoint-hook: override send failed: {e}");
+            eprintln!("agent-aspect-hook: override send failed: {e}");
             return;
         }
     };
@@ -275,12 +277,12 @@ fn send_override(
     let body = match serde_json::to_vec(&msg) {
         Ok(body) => body,
         Err(e) => {
-            eprintln!("checkpoint-hook: override serialize failed: {e}");
+            eprintln!("agent-aspect-hook: override serialize failed: {e}");
             return;
         }
     };
     if let Err(e) = stream.write_all(&body) {
-        eprintln!("checkpoint-hook: override write failed: {e}");
+        eprintln!("agent-aspect-hook: override write failed: {e}");
         return;
     }
     stream.shutdown(std::net::Shutdown::Write).ok();
@@ -292,7 +294,10 @@ fn send_override(
 ///
 /// 非 TTY 环境或 CHECKPOINT_ASSUME_NO_TTY 设置时默认返回 false。
 fn read_yes_tty() -> bool {
-    if std::env::var("CHECKPOINT_ASSUME_NO_TTY").is_ok() {
+    if checkpoint_core::env_compat::env_var_is_set(
+        "AGENT_ASPECT_ASSUME_NO_TTY",
+        "CHECKPOINT_ASSUME_NO_TTY",
+    ) {
         return false;
     }
 

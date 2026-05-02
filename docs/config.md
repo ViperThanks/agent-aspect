@@ -1,11 +1,11 @@
 # Configuration Reference
 
-Agent Aspect stores its config at `~/.checkpoint/config.toml`. The file is created on first run with sensible defaults.
+Agent Aspect stores its config at `~/.agent-aspect/config.toml`. The file is created on first run with sensible defaults.
 
 ## Config File Location
 
 ```
-~/.checkpoint/config.toml
+~/.agent-aspect/config.toml
 ```
 
 ## Fields
@@ -99,7 +99,7 @@ Default: `512`
 
 ### `relay_url`
 
-WebSocket URL of a checkpoint-relay instance. Used by the bridge to connect to a remote relay for phone access.
+WebSocket URL of a agent-aspect-relay instance. Used by the bridge to connect to a remote relay for phone access.
 
 ```toml
 relay_url = "wss://relay.example.com/ws"
@@ -149,12 +149,12 @@ Permission passthrough fields are currently verified for Claude Code only. Other
 
 | Variable | Effect |
 |----------|--------|
-| `CHECKPOINT_BRIDGE_ADDR` | Override bridge listen address (e.g. `0.0.0.0:7676`) |
-| `CHECKPOINT_RELAY_URL` | Override relay WebSocket URL |
-| `CHECKPOINT_RELAY_SETUP_TOKEN` | One-time registration token for relay |
-| `CHECKPOINT_MODE` | Override enforcement mode (daemon) |
-| `CHECKPOINT_AGENT` | Override agent detection (for testing) |
-| `CHECKPOINT_ASSUME_NO_TTY` | Disable TTY prompts in hook-cli (non-interactive environments) |
+| `AGENT_ASPECT_BRIDGE_ADDR` | Override bridge listen address (e.g. `0.0.0.0:7676`) |
+| `AGENT_ASPECT_RELAY_URL` | Override relay WebSocket URL |
+| `AGENT_ASPECT_RELAY_SETUP_TOKEN` | One-time registration token for relay |
+| `AGENT_ASPECT_MODE` | Override enforcement mode (daemon) |
+| `AGENT_ASPECT_AGENT` | Override agent detection (for testing) |
+| `AGENT_ASPECT_ASSUME_NO_TTY` | Disable TTY prompts in hook-cli (non-interactive environments) |
 | `VIBE_ISLAND_SKIP` | Skip Vibe Island permission hook (fallback fix) |
 
 ## Example Config

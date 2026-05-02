@@ -9,7 +9,7 @@ const AGENTS={claude_code:'Claude Code',codex_cli:'Codex CLI',kimi_code:'Kimi Co
 const ACTION_LABELS={allow:'允许',deny:'拒绝',ask:'待审批'};
 const STATUS_LABELS={succeeded:'成功',failed:'失败',cancelled:'已取消',timeout:'空闲超时',observing:'等待返回',running:'运行中',queued:'排队中'};
 const VERDICT_LABELS={useful:'有用',noisy:'噪音',wrong:'错误',unsure:'不确定'};
-const JOB_KINDS={checkpoint_status:'状态检查',git_status:'Git 状态',cargo_test:'Cargo 测试',smoke_test:'冒烟测试',checkpoint_mode:'模式设置',agent_prompt:'代理提示词'}; // fallback, overridden by /job-kinds
+const JOB_KINDS={agent_aspect_status:'状态检查',git_status:'Git 状态',cargo_test:'Cargo 测试',smoke_test:'冒烟测试',agent_aspect_mode:'模式设置',agent_prompt:'代理提示词'}; // fallback, overridden by /job-kinds
 function jobKindLabel(k){return S.jobKinds[k]||JOB_KINDS[k]||k}
 const PAGE=20;
 const SKELETON_HTML='<div class="skeleton-card"><div class="skeleton-row" style="width:45%"></div><div class="skeleton-row" style="width:80%"></div><div class="skeleton-row" style="width:60%"></div></div>';

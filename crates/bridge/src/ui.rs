@@ -22,7 +22,7 @@ pub const INDEX_HTML: &str = concat!(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>Checkpoint</title>
+<title>Agent Aspect</title>
 <style>"##,
     include_str!("../../shared_ui/design_tokens.css"),
     include_str!("ui/styles.css"),
@@ -47,7 +47,7 @@ pub const INDEX_HTML: &str = concat!(
     include_str!("ui/tabs/events.js"),
     include_str!("ui/tabs/run.js"),
     // === 版本信息 ===
-    "\nconsole.log('[checkpoint-bridge] UI bundle v",
+    "\nconsole.log('[agent-aspect-bridge] UI bundle v",
     env!("CARGO_PKG_VERSION"),
     " shell=bridge loaded=marked,view_model,render,api_client,job_body,runtime_health,activity_segment');\n",
     "\nvar __BUILD_VERSION__ = '",

@@ -1,4 +1,4 @@
-//! `checkpoint mode` — 查看或设置 daemon 运行模式。
+//! `agent-aspect mode` — 查看或设置 daemon 运行模式。
 //!
 //! 读/写 config.toml 中的 mode 字段。daemon 在每次处理请求时
 //! 会重新加载 config.toml，所以修改后无需重启 daemon。

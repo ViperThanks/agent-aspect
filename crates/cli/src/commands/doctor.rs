@@ -1,9 +1,9 @@
 //! `checkpoint doctor` — 安装健康检查，逐项验证所有依赖和运行状态。
 //!
 //! 检查项覆盖三大部分：
-//! - 二进制文件：checkpointd / checkpoint-hook / checkpoint-bridge 是否在 PATH 可达
+//! - 二进制文件：agent-aspectd / agent-aspect-hook / agent-aspect-bridge 是否在 PATH 可达
 //! - 运行时状态：daemon 进程存活、Unix socket 可连、state.json / audit.db 可读
-//! - 集成配置：Claude hooks 是否引用了 checkpoint-hook
+//! - 集成配置：Claude hooks 是否引用了 agent-aspect-hook
 //!
 //! 输出格式：`[ OK ] label message`，任何 FAIL 项导致退出码 1。
 
@@ -33,9 +33,9 @@ pub struct CheckResult {
 /// 任何 FAIL 会导致 `exit(1)`，WARN 只是提示。
 pub fn cmd_doctor() {
     let results = vec![
-        check_binary("checkpointd"),
-        check_binary("checkpoint-hook"),
-        check_binary("checkpoint-bridge"),
+        check_binary("agent-aspectd"),
+        check_binary("agent-aspect-hook"),
+        check_binary("agent-aspect-bridge"),
         check_daemon_running(),
         check_socket_connectable(),
         check_config_toml(),
@@ -65,7 +65,7 @@ pub fn cmd_doctor() {
 }
 
 /// 检查指定二进制是否存在于与当前可执行文件同目录下。
-/// CLI 工具链约定：checkpoint / checkpointd / checkpoint-hook / checkpoint-bridge
+/// CLI 工具链约定：agent-aspect / agent-aspectd / agent-aspect-hook / agent-aspect-bridge
 /// 都安装在同一目录。
 fn check_binary(name: &str) -> CheckResult {
     let Some(dir) = bin_dir() else {
@@ -277,7 +277,7 @@ fn check_daemon_log() -> CheckResult {
     if !log_path.exists() {
         return CheckResult {
             status: CheckStatus::Warn,
-            label: "checkpointd.log".into(),
+            label: "agent-aspectd.log".into(),
             message: "not found (daemon will create on start)".into(),
         };
     }
@@ -286,13 +286,13 @@ fn check_daemon_log() -> CheckResult {
             let size = meta.len();
             CheckResult {
                 status: CheckStatus::Ok,
-                label: "checkpointd.log".into(),
+                label: "agent-aspectd.log".into(),
                 message: format!("{} ({} bytes)", log_path.display(), size),
             }
         }
         Err(e) => CheckResult {
             status: CheckStatus::Fail,
-            label: "checkpointd.log".into(),
+            label: "agent-aspectd.log".into(),
             message: format!("stat error: {e}"),
         },
     }
@@ -323,7 +323,7 @@ fn check_bridge_status() -> CheckResult {
     }
 }
 
-/// 检查 Claude Code 的 settings.json 是否配置了 checkpoint-hook。
+/// 检查 Claude Code 的 settings.json 是否配置了 agent-aspect-hook。
 /// 支持 Claude Code 的嵌套结构 `hooks.PreToolUse[].hooks[].command`
 /// 和扁平结构 `hooks.PreToolUse[].command` 两种格式。
 fn check_claude_hooks() -> CheckResult {
@@ -384,24 +384,24 @@ fn check_claude_hooks() -> CheckResult {
         CheckResult {
             status: CheckStatus::Ok,
             label: "Claude hooks config".into(),
-            message: "checkpoint-hook found in hooks".into(),
+            message: "agent-aspect-hook found in hooks".into(),
         }
     } else {
         CheckResult {
             status: CheckStatus::Warn,
             label: "Claude hooks config".into(),
-            message: "hooks configured but checkpoint-hook not referenced".into(),
+            message: "hooks configured but agent-aspect-hook not referenced".into(),
         }
     }
 }
 
-// 递归查找 item 中是否包含 checkpoint-hook 引用
+// 递归查找 item 中是否包含 agent-aspect-hook 或旧名 checkpoint-hook 引用
 // 真实结构：item.hooks[].command（嵌套）
 // 扁平结构：item.command（兼容）
 fn contains_checkpoint_hook(item: &serde_json::Value) -> bool {
     // 扁平：item.command
     if let Some(cmd) = item.get("command").and_then(|c| c.as_str()) {
-        if cmd.contains("checkpoint-hook") {
+        if cmd.contains("agent-aspect-hook") || cmd.contains("checkpoint-hook") {
             return true;
         }
     }
@@ -409,7 +409,7 @@ fn contains_checkpoint_hook(item: &serde_json::Value) -> bool {
     if let Some(hooks) = item.get("hooks").and_then(|h| h.as_array()) {
         for h in hooks {
             if let Some(cmd) = h.get("command").and_then(|c| c.as_str()) {
-                if cmd.contains("checkpoint-hook") {
+                if cmd.contains("agent-aspect-hook") || cmd.contains("checkpoint-hook") {
                     return true;
                 }
             }

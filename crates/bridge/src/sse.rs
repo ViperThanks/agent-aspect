@@ -72,11 +72,11 @@ pub fn handle_sse_raw(request: tiny_http::Request, receiver: mpsc::Receiver<Opti
                   Connection: keep-alive\r\n\
                   \r\n";
     if let Err(e) = writer.write_all(header.as_bytes()) {
-        eprintln!("checkpoint-bridge: SSE write header: {e}");
+        eprintln!("agent-aspect-bridge: SSE write header: {e}");
         return;
     }
     if let Err(e) = writer.flush() {
-        eprintln!("checkpoint-bridge: SSE flush header: {e}");
+        eprintln!("agent-aspect-bridge: SSE flush header: {e}");
         return;
     }
 
@@ -86,11 +86,11 @@ pub fn handle_sse_raw(request: tiny_http::Request, receiver: mpsc::Receiver<Opti
             Ok(Some(event)) => {
                 let frame = format!("event: {}\ndata: {}\n\n", event.event_type, event.data);
                 if let Err(e) = writer.write_all(frame.as_bytes()) {
-                    eprintln!("checkpoint-bridge: SSE write event: {e}");
+                    eprintln!("agent-aspect-bridge: SSE write event: {e}");
                     return;
                 }
                 if let Err(e) = writer.flush() {
-                    eprintln!("checkpoint-bridge: SSE flush event: {e}");
+                    eprintln!("agent-aspect-bridge: SSE flush event: {e}");
                     return;
                 }
             }
