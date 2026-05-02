@@ -170,6 +170,16 @@ scripts/      Smoke tests for core and bridge flows
 | Kimi Code | Supported |
 | Gemini CLI | Candidate (no runtime experiments, not claimed as supported) |
 
+## What It Does Not Do
+
+- **Not a system sandbox.** Agent Aspect intercepts tool calls at the agent hook layer. It does not sandbox the OS.
+- **Not a cloud service.** No accounts, no cloud sync, no hosted dashboard. Everything runs on your Mac.
+- **Not an agent itself.** It does not write code, run prompts, or replace your coding tools.
+- **Relay is optional.** The default path is local-only. Relay exists solely for remote phone access.
+- **Device IDs are not authentication.** They record which browser made a decision, for audit purposes only.
+- **Learned rules cannot override deny.** Explicit deny rules are always authoritative.
+- **Gemini CLI is not supported.** It is a candidate with scaffolding only, no proven end-to-end flow.
+
 ## Security Model
 
 - **Trust anchor is your Mac.** The daemon, rule engine, and audit store all run locally.

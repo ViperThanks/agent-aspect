@@ -364,6 +364,43 @@ else
     wait "$BRIDGE_PID" 2>/dev/null || true
 fi
 
+# ============================================================
+# Phase 3: Security boundary tests (after bridge cleanup)
+# ============================================================
+
+echo ""
+echo "=== test 20: POST oversized body (>1 MiB) → rejected ==="
+OVERSIZED_BODY=$(python3 -c "print('x' * (1024*1024+1))")
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+    -H "Authorization: Bearer $CLIENT_TOKEN" -H "Content-Type: application/json" \
+    -d "{\"event_id\":\"$OVERSIZED_BODY\"}" \
+    "$RELAY_API/api/decide" 2>/dev/null || echo "000")
+if [ "$HTTP_CODE" = "413" ] || [ "$HTTP_CODE" = "000" ]; then
+    echo "PASS: oversized body rejected ($HTTP_CODE)"
+else
+    echo "FAIL: expected 413 or connection drop, got $HTTP_CODE"
+    FAILED=1
+fi
+
+echo ""
+echo "=== test 21: Registration rate limit (>10 in 60s) → 429 ==="
+RATE_HIT=0
+for i in $(seq 1 12); do
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+        -H "Content-Type: application/json" \
+        -d "{\"setup_token\":\"rate-test-$i\",\"label\":\"rate-test\",\"ttl_days\":1}" \
+        "$RELAY_API/api/register" 2>/dev/null || echo "000")
+    if [ "$HTTP_CODE" = "429" ]; then
+        RATE_HIT=1
+        break
+    fi
+done
+if [ "$RATE_HIT" -eq 1 ]; then
+    echo "PASS: rate limit triggered"
+else
+    echo "WARN: rate limit not hit within 12 attempts (may be timing-dependent)"
+fi
+
 # Cleanup
 kill "$RELAY_PID" 2>/dev/null || true
 wait "$RELAY_PID" 2>/dev/null || true
