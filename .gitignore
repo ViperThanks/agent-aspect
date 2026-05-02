@@ -11,6 +11,7 @@
 .*
 !.env.example
 !.gitignore
+!.github/
 .git-private-backup-*/
 tasks/
 notes/
@@ -19,10 +20,15 @@ notes/
 *.md
 !README.md
 !README.zh-CN.md
+!CONTRIBUTING.md
 !docs/config.md
 !docs/relay.md
 !docs/security.md
 !docs/open-source-scope.md
+!docs/PLAN.md
+!.github/ISSUE_TEMPLATE/rfc.md
+!.github/ISSUE_TEMPLATE/bug_report.md
+!.github/ISSUE_TEMPLATE/feature_request.md
 
 # Secrets / runtime data
 .env
