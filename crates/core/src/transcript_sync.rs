@@ -730,25 +730,20 @@ not valid json at all
 {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Let me check."},{"type":"tool_use","id":"call_1","name":"Read","input":{"file_path":"/src/main.rs"}}]}}
 "#;
         std::fs::create_dir_all(&dir).unwrap();
-        // We need to use a claude_code path — create the expected directory structure
-        let fake_project = format!("/tmp/cp-sync-multi-test-{}", std::process::id());
-        let encoded = fake_project.replace('/', "-");
-        let home = std::env::var("HOME").unwrap_or_default();
-        let proj_dir = std::path::PathBuf::from(format!("{home}/.claude/projects/{encoded}"));
-        std::fs::create_dir_all(&proj_dir).unwrap();
-        let jsonl_path = proj_dir.join("multi-test-session.jsonl");
+        let conv_id = "multi-test-session";
+        let jsonl_path = dir.join(format!("{conv_id}.jsonl"));
         std::fs::write(&jsonl_path, content).unwrap();
 
         let store = AuditStore::open_in_memory().unwrap();
-        let conv_id = "multi-test-session";
 
+        // Pass transcript_path directly to avoid $HOME-dependent project dir resolution.
         let r = sync_conversation_messages(
             &store,
             "claude_code",
             conv_id,
             conv_id,
-            Some(&fake_project),
             None,
+            Some(jsonl_path.to_str().unwrap()),
         );
 
         // Line 1: user → 1 message. Line 2: assistant text + tool_use → 2 messages. Total = 3.
@@ -769,7 +764,6 @@ not valid json at all
         );
         assert_eq!(msgs[2].get("tool_name").unwrap().as_str().unwrap(), "Read");
 
-        std::fs::remove_dir_all(&proj_dir).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
