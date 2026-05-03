@@ -191,7 +191,7 @@ fn install_claude(hook: &str) {
         && !json_contains_command(&root, "checkpoint-hook");
     let mut changed = false;
 
-    for event in ["PreToolUse", "SessionStart", "UserPromptSubmit"] {
+    for event in ["PreToolUse", "SessionStart", "UserPromptSubmit", "Stop"] {
         if ensure_json_hook_entry(&mut root, event, &command) {
             changed = true;
         }
@@ -320,5 +320,93 @@ fn json_contains_command(value: &serde_json::Value, needle: &str) -> bool {
         serde_json::Value::Array(items) => items.iter().any(|v| json_contains_command(v, needle)),
         serde_json::Value::Object(obj) => obj.values().any(|v| json_contains_command(v, needle)),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn install_claude_registers_stop_hook() {
+        // Simulate what install_claude does: iterate events and ensure entries
+        let mut root = serde_json::json!({});
+        let command = "AGENT_ASPECT_AGENT=claude /usr/local/bin/agent-aspect-hook";
+
+        for event in ["PreToolUse", "SessionStart", "UserPromptSubmit", "Stop"] {
+            ensure_json_hook_entry(&mut root, event, command);
+        }
+
+        // Verify Stop hook is present
+        let hooks = root.get("hooks").expect("hooks must exist");
+        let stop_hooks = hooks.get("Stop").expect("Stop event must exist");
+        assert!(stop_hooks.is_array());
+        let arr = stop_hooks.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+
+        let hook_cmd = arr[0]
+            .get("hooks")
+            .and_then(|h| h.as_array())
+            .and_then(|a| a.first())
+            .and_then(|h| h.get("command"))
+            .and_then(|c| c.as_str())
+            .expect("command must exist");
+        assert!(hook_cmd.contains("agent-aspect-hook"));
+
+        // Stop should NOT have matcher="*"
+        let matcher = arr[0]
+            .get("matcher")
+            .and_then(|m| m.as_str())
+            .unwrap_or("");
+        assert_eq!(matcher, "", "Stop hook must not have matcher=\"*\"");
+
+        // PreToolUse should have matcher="*"
+        let pre_hooks = root
+            .get("hooks")
+            .and_then(|h| h.get("PreToolUse"))
+            .and_then(|h| h.as_array())
+            .unwrap();
+        let pre_matcher = pre_hooks[0]
+            .get("matcher")
+            .and_then(|m| m.as_str())
+            .unwrap_or("");
+        assert_eq!(pre_matcher, "*");
+    }
+
+    #[test]
+    fn install_claude_stop_is_idempotent() {
+        let mut root = serde_json::json!({});
+        let command = "AGENT_ASPECT_AGENT=claude /usr/local/bin/agent-aspect-hook";
+
+        // First pass: all should be new
+        let mut any_changed = false;
+        for event in ["PreToolUse", "SessionStart", "UserPromptSubmit", "Stop"] {
+            if ensure_json_hook_entry(&mut root, event, command) {
+                any_changed = true;
+            }
+        }
+        assert!(any_changed);
+
+        // Second pass: none should be new
+        for event in ["PreToolUse", "SessionStart", "UserPromptSubmit", "Stop"] {
+            assert!(
+                !ensure_json_hook_entry(&mut root, event, command),
+                "{event} should not be added twice"
+            );
+        }
+    }
+
+    #[test]
+    fn json_contains_command_finds_marker() {
+        let root = serde_json::json!({
+            "hooks": {
+                "Stop": [{
+                    "matcher": "",
+                    "hooks": [{"type": "command", "command": "AGENT_ASPECT_AGENT=claude /usr/local/bin/agent-aspect-hook"}]
+                }]
+            }
+        });
+        assert!(json_contains_command(&root, "agent-aspect-hook"));
+        assert!(!json_contains_command(&root, "nonexistent-binary"));
     }
 }

@@ -51,6 +51,13 @@ fn main() {
             agent: Some(agent),
             device_id: Some("local-hook".to_string()),
         }
+    } else if hook_event == "Stop" {
+        // Stop 信号路径：通知 daemon 收敛对应 job
+        WireRequest::Stop {
+            payload,
+            agent: Some(agent),
+            device_id: Some("local-hook".to_string()),
+        }
     } else {
         // 会话元数据路径：仅供审计，不需要判定
         WireRequest::Metadata {
@@ -87,8 +94,8 @@ fn main() {
                 }
             };
 
-            // Metadata 请求始终返回 Allow，不需要输出 hook 响应
-            if matches!(request, WireRequest::Metadata { .. }) {
+            // Metadata 和 Stop 请求不需要输出 hook 响应
+            if matches!(request, WireRequest::Metadata { .. } | WireRequest::Stop { .. }) {
                 return;
             }
 

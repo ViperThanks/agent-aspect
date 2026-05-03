@@ -29,6 +29,7 @@ pub struct JobRow {
     pub failure_reason: Option<String>,
     pub last_log_at: Option<String>,
     pub completed_reason: Option<String>,
+    pub stop_requested_at: Option<String>,
 }
 
 /// 任务日志行 — stdout/stderr/system 流的逐块记录。
@@ -65,6 +66,7 @@ impl AuditStore {
             failure_reason: row.get(17)?,
             last_log_at: row.get(18)?,
             completed_reason: row.get(19)?,
+            stop_requested_at: row.get(20)?,
         })
     }
 
@@ -332,7 +334,7 @@ impl AuditStore {
                 "SELECT id, kind, input, status, created_at, started_at, finished_at, exit_code,
                     provider, project_path, conversation_id, prompt, pid, process_group_id,
                     runner_id, heartbeat_at, timeout_secs, failure_reason, last_log_at,
-                    completed_reason
+                    completed_reason, stop_requested_at
              FROM jobs
              WHERE status IN ('queued', 'running', 'observing') AND (runner_id IS NULL OR runner_id != ?1)
              ORDER BY created_at ASC",
@@ -375,7 +377,7 @@ impl AuditStore {
                 "SELECT id, kind, input, status, created_at, started_at, finished_at, exit_code,
                         provider, project_path, conversation_id, prompt, pid, process_group_id,
                         runner_id, heartbeat_at, timeout_secs, failure_reason, last_log_at,
-                        completed_reason
+                        completed_reason, stop_requested_at
                  FROM jobs WHERE id = ?1",
                 rusqlite::params![id],
                 Self::map_job_row,
@@ -397,7 +399,7 @@ impl AuditStore {
             "SELECT id, kind, input, status, created_at, started_at, finished_at, exit_code,
                     provider, project_path, conversation_id, prompt, pid, process_group_id,
                     runner_id, heartbeat_at, timeout_secs, failure_reason, last_log_at,
-                    completed_reason FROM jobs",
+                    completed_reason, stop_requested_at FROM jobs",
         );
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         if let Some(s) = status_filter {
@@ -499,5 +501,101 @@ impl AuditStore {
                 })
                 .map_err(CheckpointError::QueryJob),
         }
+    }
+
+    /// Set stop_requested_at on a running/observing job. Returns affected rows.
+    pub fn set_stop_requested_at(
+        &self,
+        job_id: &str,
+        timestamp: &str,
+    ) -> CheckpointResult<usize> {
+        let rows = self
+            .conn
+            .execute(
+                "UPDATE jobs SET stop_requested_at = ?2
+                 WHERE id = ?1 AND status IN ('running', 'observing')
+                   AND stop_requested_at IS NULL",
+                rusqlite::params![job_id, timestamp],
+            )
+            .map_err(CheckpointError::UpdateJob)?;
+        Ok(rows)
+    }
+
+    /// Find a running job matching the stop signal by provider + conversation_id.
+    pub fn find_running_job_by_conversation(
+        &self,
+        provider: &str,
+        conversation_id: &str,
+    ) -> CheckpointResult<Option<JobRow>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, kind, input, status, created_at, started_at, finished_at, exit_code,
+                        provider, project_path, conversation_id, prompt, pid, process_group_id,
+                        runner_id, heartbeat_at, timeout_secs, failure_reason, last_log_at,
+                        completed_reason, stop_requested_at
+                 FROM jobs
+                 WHERE status IN ('running', 'observing')
+                   AND provider = ?1 AND conversation_id = ?2
+                 ORDER BY started_at DESC LIMIT 1",
+            )
+            .map_err(CheckpointError::QueryJob)?;
+        let mut rows = stmt
+            .query_map(rusqlite::params![provider, conversation_id], Self::map_job_row)
+            .map_err(CheckpointError::QueryJob)?;
+        match rows.next() {
+            Some(row) => Ok(Some(row.map_err(CheckpointError::QueryJob)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Find a running job matching by provider + project_path (fallback when no conversation_id).
+    pub fn find_running_job_by_project(
+        &self,
+        provider: &str,
+        project_path: &str,
+    ) -> CheckpointResult<Option<JobRow>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, kind, input, status, created_at, started_at, finished_at, exit_code,
+                        provider, project_path, conversation_id, prompt, pid, process_group_id,
+                        runner_id, heartbeat_at, timeout_secs, failure_reason, last_log_at,
+                        completed_reason, stop_requested_at
+                 FROM jobs
+                 WHERE status IN ('running', 'observing')
+                   AND provider = ?1 AND project_path = ?2
+                 ORDER BY started_at DESC LIMIT 1",
+            )
+            .map_err(CheckpointError::QueryJob)?;
+        let mut rows = stmt
+            .query_map(rusqlite::params![provider, project_path], Self::map_job_row)
+            .map_err(CheckpointError::QueryJob)?;
+        match rows.next() {
+            Some(row) => Ok(Some(row.map_err(CheckpointError::QueryJob)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Get all running/observing jobs that have stop_requested_at set.
+    /// Used by bridge tick to converge stopped jobs.
+    pub fn get_jobs_with_stop_requested(&self) -> CheckpointResult<Vec<JobRow>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, kind, input, status, created_at, started_at, finished_at, exit_code,
+                        provider, project_path, conversation_id, prompt, pid, process_group_id,
+                        runner_id, heartbeat_at, timeout_secs, failure_reason, last_log_at,
+                        completed_reason, stop_requested_at
+                 FROM jobs
+                 WHERE status IN ('running', 'observing')
+                   AND stop_requested_at IS NOT NULL",
+            )
+            .map_err(CheckpointError::QueryJob)?;
+        let rows = stmt
+            .query_map([], Self::map_job_row)
+            .map_err(CheckpointError::QueryJob)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(CheckpointError::QueryJob)
     }
 }

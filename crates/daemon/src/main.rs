@@ -237,6 +237,13 @@ fn handle_client(mut stream: UnixStream, store: &AuditStore, engine: &RuleEngine
         WireRequest::Metadata { payload, agent, .. } => {
             handle_metadata(&payload, agent.as_ref(), store, &mut stream);
         }
+        WireRequest::Stop {
+            payload,
+            agent,
+            device_id,
+        } => {
+            handle_stop(&payload, agent.as_ref(), device_id.as_deref(), store, &mut stream);
+        }
     }
 }
 
@@ -316,6 +323,98 @@ fn handle_metadata(
 
     let resp = WireResponse {
         event_id: None,
+        action: Action::Allow,
+        note: String::new(),
+    };
+    write_wire_response(stream, &resp);
+}
+
+/// 处理 Claude Stop hook：找到对应 running job 并写入 stop_requested_at marker。
+///
+/// 匹配策略（按优先级）：
+/// 1. provider + conversation_id（从 session_id 提取）
+/// 2. provider + project_path（fallback，仅当 conversation_id 不可用时）
+///
+/// 找不到匹配 job 时只写 Stop audit，不误杀 running job。
+fn handle_stop(
+    payload: &str,
+    agent: Option<&AgentId>,
+    device_id: Option<&str>,
+    store: &AuditStore,
+    stream: &mut UnixStream,
+) {
+    use checkpoint_core::conversation::extract_conversation_id;
+
+    let agent_str = match agent {
+        Some(a) => a.as_str(),
+        None => "claude_code",
+    };
+    let device_id = device_id.unwrap_or("local-hook");
+    let now = chrono::Utc::now().to_rfc3339();
+
+    // Always write a stop audit event
+    let event_id = uuid::Uuid::now_v7().to_string();
+    let _ = store.insert_event(
+        &event_id,
+        "stop",
+        "hook.stop",
+        agent_str,
+        "stop",
+        None,
+        &now,
+        payload,
+    );
+    let _ = store.insert_decision_for_device(
+        &event_id,
+        "allow",
+        None,
+        "stop hook received",
+        &now,
+        Some(device_id),
+    );
+
+    // Extract conversation_id from payload for job matching
+    let conversation_id = extract_conversation_id(agent_str, payload);
+    let provider = agent_str;
+
+    // Try to find matching running job:
+    // 1. Primary: provider + conversation_id
+    // 2. Fallback: provider + project_path (covers jobs that haven't bound conversation_id yet)
+    let matched_job = conversation_id
+        .as_deref()
+        .and_then(|cid| store.find_running_job_by_conversation(provider, cid).ok().flatten())
+        .or_else(|| {
+            let project_path =
+                checkpoint_core::conversation::extract_project_path(agent_str, payload);
+            project_path
+                .as_deref()
+                .and_then(|pp| store.find_running_job_by_project(provider, pp).ok().flatten())
+        });
+
+    if let Some(job) = matched_job {
+        if let Err(e) = store.set_stop_requested_at(&job.id, &now) {
+            log_info!("stop marker write failed for job {}: {e}", job.id);
+        } else {
+            log_info!(
+                "stop marker set for job {} (provider={}, conv={:?})",
+                job.id,
+                provider,
+                job.conversation_id
+            );
+        }
+    } else {
+        let project_path =
+            checkpoint_core::conversation::extract_project_path(agent_str, payload);
+        log_info!(
+            "stop hook received but no matching running job found (provider={}, conv={:?}, project={:?})",
+            provider,
+            conversation_id,
+            project_path
+        );
+    }
+
+    let resp = WireResponse {
+        event_id: Some(event_id),
         action: Action::Allow,
         note: String::new(),
     };

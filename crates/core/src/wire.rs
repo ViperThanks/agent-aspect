@@ -1,7 +1,7 @@
 //! 线路协议 — provider hook 通信的请求/响应类型。
 //!
 //! 定义 Checkpoint hook 与 AI provider hook 系统之间交换的数据结构。
-//! 三种请求类型：Evaluate（规则评估）、Override（人工覆盖）、Metadata（会话元数据）。
+//! 四种请求类型：Evaluate（规则评估）、Override（人工覆盖）、Metadata（会话元数据）、Stop（停止信号）。
 
 use crate::decision::{Action, Decision};
 use crate::event::AgentId;
@@ -36,6 +36,13 @@ pub enum WireRequest {
         device_id: Option<String>,
     },
     Metadata {
+        payload: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        agent: Option<AgentId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        device_id: Option<String>,
+    },
+    Stop {
         payload: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         agent: Option<AgentId>,

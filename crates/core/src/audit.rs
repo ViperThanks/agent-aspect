@@ -192,6 +192,7 @@ impl AuditStore {
         self.migrate_v10_conversation_messages()?;
         self.migrate_v11_runtime_identity()?;
         self.migrate_v12_job_completed_reason()?;
+        self.migrate_v13_stop_marker()?;
         self.conn
             .execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_conv_agent ON events(conversation_id, agent)",
@@ -432,6 +433,23 @@ impl AuditStore {
         }
         Ok(())
     }
+
+    /// v13: jobs 表新增 stop_requested_at — Claude Stop hook 写入的收敛信号。
+    ///
+    /// nullable TEXT (ISO 8601)，非 NULL 表示该 job 收到了 stop 请求。
+    /// bridge tick 检测到后会把 job 从 running 收敛到 terminal 状态。
+    fn migrate_v13_stop_marker(&self) -> CheckpointResult<()> {
+        if !self.column_exists("jobs", "stop_requested_at")? {
+            self.conn
+                .execute(
+                    "ALTER TABLE jobs ADD COLUMN stop_requested_at TEXT",
+                    [],
+                )
+                .map_err(CheckpointError::MigrateConversationSchema)?;
+        }
+        Ok(())
+    }
+
     /// 遗留迁移：将 decisions 表从 event_id 主键改为自增 id 主键，
     /// 以支持同一 event 的多次决策（覆盖场景）。
     fn migrate_legacy_decisions_schema(&self) -> CheckpointResult<()> {
@@ -1612,5 +1630,169 @@ mod tests {
         assert_eq!(conv.permission_mode, "bypassPermissions");
         assert_eq!(conv.entrypoint, Some("cli".to_string()));
         assert_eq!(conv.identity_version, 1);
+    }
+
+    #[test]
+    fn stop_marker_converges_running_job() {
+        let store = AuditStore::open_in_memory().expect("open in-memory db");
+        let now = "2026-05-03T10:00:00Z";
+
+        // 1. Insert and start a job
+        store
+            .insert_job(
+                "j-stop",
+                "agent_prompt",
+                "{}",
+                now,
+                Some("claude_code"),
+                Some("/tmp/proj"),
+                Some("sess-stop-1"),
+                Some("test prompt"),
+            )
+            .expect("insert job");
+        store
+            .update_job_started_supervised(
+                "j-stop",
+                "2026-05-03T10:00:01Z",
+                Some(100),
+                Some(100),
+                Some("runner-1"),
+                Some(180),
+            )
+            .expect("mark started");
+
+        // Verify job is running
+        let job = store.get_job("j-stop").unwrap().unwrap();
+        assert_eq!(job.status, "running");
+        assert!(job.stop_requested_at.is_none());
+
+        // 2. Find job by conversation and set stop marker
+        let found = store
+            .find_running_job_by_conversation("claude_code", "sess-stop-1")
+            .unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().id, "j-stop");
+
+        let stop_time = "2026-05-03T10:05:00Z";
+        let rows = store.set_stop_requested_at("j-stop", stop_time).unwrap();
+        assert_eq!(rows, 1);
+
+        // Idempotent: second set is a no-op
+        let rows = store.set_stop_requested_at("j-stop", "2026-05-03T10:05:01Z").unwrap();
+        assert_eq!(rows, 0);
+
+        // 3. Bridge tick: get jobs with stop_requested
+        let stopped = store.get_jobs_with_stop_requested().unwrap();
+        assert_eq!(stopped.len(), 1);
+        assert_eq!(stopped[0].id, "j-stop");
+        assert_eq!(stopped[0].stop_requested_at.as_deref(), Some(stop_time));
+
+        // 4. Bridge converges job to terminal state
+        let now2 = "2026-05-03T10:05:02Z";
+        store
+            .update_job_finished_with_completed_reason(
+                "j-stop",
+                "failed",
+                now2,
+                None,
+                Some("stop hook received"),
+                Some("stop_requested"),
+            )
+            .expect("converge job");
+
+        // 5. Write system log
+        store
+            .insert_job_log(
+                "j-stop",
+                "system",
+                "[stop hook received \u{2014} converging job]",
+                0,
+                now2,
+            )
+            .expect("write log");
+
+        // 6. Verify final state
+        let job = store.get_job("j-stop").unwrap().unwrap();
+        assert_eq!(job.status, "failed");
+        assert_eq!(job.completed_reason.as_deref(), Some("stop_requested"));
+        assert_eq!(job.failure_reason.as_deref(), Some("stop hook received"));
+        assert_eq!(job.stop_requested_at.as_deref(), Some(stop_time));
+
+        let logs = store.get_job_logs("j-stop").unwrap();
+        assert!(logs.iter().any(|l| l.chunk.contains("stop hook received")));
+
+        // 7. No longer in stopped list (terminal state)
+        let stopped = store.get_jobs_with_stop_requested().unwrap();
+        assert_eq!(stopped.len(), 0);
+    }
+
+    #[test]
+    fn stop_marker_no_false_match_on_wrong_provider() {
+        let store = AuditStore::open_in_memory().expect("open in-memory db");
+        let now = "2026-05-03T10:00:00Z";
+
+        store
+            .insert_job(
+                "j-kimi",
+                "agent_prompt",
+                "{}",
+                now,
+                Some("kimi_code"),
+                Some("/tmp/proj"),
+                Some("shared-sess"),
+                Some("test"),
+            )
+            .expect("insert job");
+        store
+            .update_job_started("j-kimi", "2026-05-03T10:00:01Z")
+            .expect("mark started");
+
+        // Stop for claude_code should NOT match kimi_code job
+        let found = store
+            .find_running_job_by_conversation("claude_code", "shared-sess")
+            .unwrap();
+        assert!(found.is_none(), "must not cross provider boundary");
+
+        // Stop for kimi_code should match
+        let found = store
+            .find_running_job_by_conversation("kimi_code", "shared-sess")
+            .unwrap();
+        assert!(found.is_some());
+    }
+
+    #[test]
+    fn stop_marker_fallback_to_project_path() {
+        let store = AuditStore::open_in_memory().expect("open in-memory db");
+        let now = "2026-05-03T10:00:00Z";
+
+        // Job without conversation_id (not yet bound)
+        store
+            .insert_job(
+                "j-unbound",
+                "agent_prompt",
+                "{}",
+                now,
+                Some("claude_code"),
+                Some("/tmp/proj"),
+                None, // no conversation_id
+                Some("test"),
+            )
+            .expect("insert job");
+        store
+            .update_job_started("j-unbound", "2026-05-03T10:00:01Z")
+            .expect("mark started");
+
+        // Primary lookup by conversation_id should miss
+        let found = store
+            .find_running_job_by_conversation("claude_code", "sess-from-stop-payload")
+            .unwrap();
+        assert!(found.is_none(), "no conversation_id on job, primary must miss");
+
+        // Fallback lookup by project_path should hit
+        let found = store
+            .find_running_job_by_project("claude_code", "/tmp/proj")
+            .unwrap();
+        assert!(found.is_some(), "project_path fallback must match");
+        assert_eq!(found.unwrap().id, "j-unbound");
     }
 }

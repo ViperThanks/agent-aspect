@@ -1086,8 +1086,10 @@ fn exec_job(
     let hard_timeout = Duration::from_secs(timeout_secs);
     let mut last_heartbeat = Instant::now();
     let mut last_fs_check = Instant::now();
+    let mut last_stop_check = Instant::now();
     let mut last_fs_activity = latest_project_activity(&cwd_path);
     let mut timed_out = false;
+    let mut stop_requested = false;
     let mut observing = false;
     let mut exit_status: Option<std::process::ExitStatus> = None;
     let mut termination_source = "process_exit";
@@ -1148,6 +1150,18 @@ fn exec_job(
                     last_fs_check = now_instant;
                 }
 
+                // Check stop_requested_at marker every ~1s
+                if now_instant.duration_since(last_stop_check) >= Duration::from_secs(1) {
+                    last_stop_check = now_instant;
+                    if let Ok(Some(job_row)) = store.get_job(job_id) {
+                        if job_row.stop_requested_at.is_some() {
+                            stop_requested = true;
+                            termination_source = "stop_requested";
+                            break;
+                        }
+                    }
+                }
+
                 let last_activity = log_writer.lock().unwrap().last_activity;
 
                 // Soft timeout: enter observing state
@@ -1187,8 +1201,8 @@ fn exec_job(
         }
     }
 
-    // Kill child on idle timeout or external cancel
-    if timed_out || cancel_flag.load(Ordering::Relaxed) {
+    // Kill child on idle timeout, external cancel, or stop marker
+    if timed_out || stop_requested || cancel_flag.load(Ordering::Relaxed) {
         let mut guard = running.lock().unwrap();
         if let Some(ref mut rj) = *guard {
             kill_process_group_or_child(Some(process_group_id), Some(pid), &mut rj.child);
@@ -1213,6 +1227,12 @@ fn exec_job(
         ));
     }
 
+    // Write stop marker log entry
+    if stop_requested {
+        let mut lw = log_writer.lock().unwrap();
+        lw.write_system_no_activity("[stop hook received — converging job]");
+    }
+
     // Clear running state
     {
         let mut guard = running.lock().unwrap();
@@ -1231,6 +1251,15 @@ fn exec_job(
                 "idle timeout after {timeout_secs}s without output (source: {termination_source})"
             )),
             Some("timeout_killed"),
+        );
+    } else if stop_requested {
+        let _ = store.update_job_finished_with_completed_reason(
+            job_id,
+            "failed",
+            &now,
+            None,
+            Some("stop hook received"),
+            Some("stop_requested"),
         );
     } else if let Some(status) = exit_status {
         let code = status.code();
@@ -1954,6 +1983,7 @@ pub fn handle_get_jobs(request: &tiny_http::Request, runner: &JobRunner) -> tiny
                         "timeout_secs": j.timeout_secs,
                         "failure_reason": j.failure_reason,
                         "last_log_at": j.last_log_at,
+                        "stop_requested_at": j.stop_requested_at,
                     })
                 })
                 .collect();
@@ -1990,6 +2020,7 @@ pub fn handle_get_job(job_id: &str, runner: &JobRunner) -> tiny_http::ResponseBo
                 "timeout_secs": j.timeout_secs,
                 "failure_reason": j.failure_reason,
                 "last_log_at": j.last_log_at,
+                "stop_requested_at": j.stop_requested_at,
             }),
         ),
         Err(e) => json_response(500, &serde_json::json!({"error": e})),

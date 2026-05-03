@@ -199,6 +199,7 @@ dependencies = [
  "checkpoint-core",
  "chrono",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
