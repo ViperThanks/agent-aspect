@@ -14,7 +14,7 @@
 //! - 每个非 SSE 请求在独立线程中处理，DB 通过 Arc<Mutex<>> 串行化
 //! - 后台 import 线程每 5 分钟执行一次，与请求线程共享 DB 连接
 
-use checkpoint_bridge::{auth, context::AppContext, jobs, relay_client, routes, sse};
+use checkpoint_bridge::{auth, context::AppContext, jobs, relay_client, routes, sse, workflows};
 use checkpoint_core::config::Config;
 use checkpoint_core::paths;
 use checkpoint_core::provider_registry::ProviderRegistry;
@@ -85,6 +85,11 @@ fn main() {
         broadcaster.clone(),
         resolver.clone(),
         registry.clone(),
+    ));
+
+    let workflow_runner = Arc::new(workflows::WorkflowRunner::new(
+        paths::audit_db_path(),
+        broadcaster.clone(),
     ));
 
     // 5. 启动后台 auto_import 线程：每 5 分钟执行一次标题导入
@@ -198,6 +203,7 @@ fn main() {
         let ctx = ctx.clone();
         let broadcaster = broadcaster.clone();
         let job_runner = job_runner.clone();
+        let workflow_runner = workflow_runner.clone();
         let token = token.clone();
 
         std::thread::spawn(move || {
@@ -500,6 +506,58 @@ fn main() {
                             )
                         } else {
                             routes::handle_get_conversation(&ctx, cid)
+                        }
+                    }
+                }
+
+                // Workflow routes
+                (_, true, "/workflows") => {
+                    if !auth::check_auth(&request, &token) {
+                        routes::json_response(403, &serde_json::json!({"error": "unauthorized"}))
+                    } else {
+                        workflows::handle_post_workflows(&ctx, &mut request, &workflow_runner)
+                    }
+                }
+                (true, _, "/workflows") => {
+                    if !auth::check_auth(&request, &token) {
+                        routes::json_response(403, &serde_json::json!({"error": "unauthorized"}))
+                    } else {
+                        workflows::handle_get_workflows(&ctx, &request)
+                    }
+                }
+                (_, true, p) if p.starts_with("/workflows/") && p.ends_with("/run") => {
+                    if !auth::check_auth(&request, &token) {
+                        routes::json_response(403, &serde_json::json!({"error": "unauthorized"}))
+                    } else {
+                        let wf_id = &p["/workflows/".len()..p.len() - "/run".len()];
+                        if wf_id.is_empty() {
+                            routes::json_response(400, &serde_json::json!({"error": "missing workflow id"}))
+                        } else {
+                            workflows::handle_post_workflow_run(&ctx, wf_id, &workflow_runner, &job_runner)
+                        }
+                    }
+                }
+                (_, true, p) if p.starts_with("/workflows/") && p.ends_with("/cancel") => {
+                    if !auth::check_auth(&request, &token) {
+                        routes::json_response(403, &serde_json::json!({"error": "unauthorized"}))
+                    } else {
+                        let wf_id = &p["/workflows/".len()..p.len() - "/cancel".len()];
+                        if wf_id.is_empty() {
+                            routes::json_response(400, &serde_json::json!({"error": "missing workflow id"}))
+                        } else {
+                            workflows::handle_post_workflow_cancel(wf_id, &workflow_runner)
+                        }
+                    }
+                }
+                (true, _, p) if p.starts_with("/workflows/") => {
+                    if !auth::check_auth(&request, &token) {
+                        routes::json_response(403, &serde_json::json!({"error": "unauthorized"}))
+                    } else {
+                        let wf_id = &p["/workflows/".len()..];
+                        if wf_id.is_empty() {
+                            routes::json_response(400, &serde_json::json!({"error": "missing workflow id"}))
+                        } else {
+                            workflows::handle_get_workflow(&ctx, wf_id)
                         }
                     }
                 }

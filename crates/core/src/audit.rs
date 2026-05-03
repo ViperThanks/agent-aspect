@@ -26,6 +26,7 @@ pub use crate::store::jobs::{JobLogRow, JobRow};
 pub use crate::store::messages::SyncStateRow;
 pub use crate::store::suggestions::SuggestionRow;
 pub use crate::store::users::UserRow;
+pub use crate::store::workflows::{WorkflowRow, WorkflowStepRow};
 
 /// 审计存储 facade — 持有 SQLite 连接，所有 DAO 方法通过 split impl 分布在各 store/ 子模块。
 pub struct AuditStore {
@@ -179,7 +180,36 @@ impl AuditStore {
                     message_count INTEGER NOT NULL DEFAULT 0,
                     last_synced_at TEXT,
                     last_error TEXT
-                );",
+                );
+                CREATE TABLE IF NOT EXISTS workflows (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'draft'
+                        CHECK(status IN ('draft','running','succeeded','failed','cancelled')),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS workflow_steps (
+                    id TEXT PRIMARY KEY,
+                    workflow_id TEXT NOT NULL,
+                    step_order INTEGER NOT NULL,
+                    kind TEXT NOT NULL DEFAULT 'agent_prompt',
+                    provider TEXT,
+                    project_path TEXT,
+                    prompt TEXT NOT NULL DEFAULT '',
+                    context_strategy TEXT NOT NULL DEFAULT 'none'
+                        CHECK(context_strategy IN ('none','last_50_lines','last_100_lines','full_log')),
+                    context_from_step INTEGER,
+                    status TEXT NOT NULL DEFAULT 'pending'
+                        CHECK(status IN ('pending','running','succeeded','failed','cancelled','skipped')),
+                    job_id TEXT,
+                    created_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    FOREIGN KEY (workflow_id) REFERENCES workflows(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_workflow_steps_workflow ON workflow_steps(workflow_id, step_order);
+                CREATE INDEX IF NOT EXISTS idx_workflow_steps_job ON workflow_steps(job_id);",
             )
             .map_err(CheckpointError::InitTables)?;
         self.migrate_legacy_decisions_schema()?;
@@ -195,6 +225,7 @@ impl AuditStore {
         self.migrate_v12_job_completed_reason()?;
         self.migrate_v13_stop_marker()?;
         self.migrate_v14_sys_user()?;
+        self.migrate_v15_workflows()?;
         self.conn
             .execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_conv_agent ON events(conversation_id, agent)",
@@ -464,6 +495,47 @@ impl AuditStore {
                     last_login_at TEXT,
                     disabled_at TEXT
                 );",
+            )
+            .map_err(CheckpointError::MigrateConversationSchema)?;
+        Ok(())
+    }
+
+    /// v15: 新增 workflows + workflow_steps 表 — 本地编排引擎。
+    ///
+    /// workflows 定义一个链式任务流，workflow_steps 定义每一步的执行参数。
+    /// steps 按 step_order 串行执行，前一步的 job logs 可通过 context_strategy 传递给下一步。
+    fn migrate_v15_workflows(&self) -> CheckpointResult<()> {
+        self.conn
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS workflows (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'draft'
+                        CHECK(status IN ('draft','running','succeeded','failed','cancelled')),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS workflow_steps (
+                    id TEXT PRIMARY KEY,
+                    workflow_id TEXT NOT NULL,
+                    step_order INTEGER NOT NULL,
+                    kind TEXT NOT NULL DEFAULT 'agent_prompt',
+                    provider TEXT,
+                    project_path TEXT,
+                    prompt TEXT NOT NULL DEFAULT '',
+                    context_strategy TEXT NOT NULL DEFAULT 'none'
+                        CHECK(context_strategy IN ('none','last_50_lines','last_100_lines','full_log')),
+                    context_from_step INTEGER,
+                    status TEXT NOT NULL DEFAULT 'pending'
+                        CHECK(status IN ('pending','running','succeeded','failed','cancelled','skipped')),
+                    job_id TEXT,
+                    created_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    FOREIGN KEY (workflow_id) REFERENCES workflows(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_workflow_steps_workflow ON workflow_steps(workflow_id, step_order);
+                CREATE INDEX IF NOT EXISTS idx_workflow_steps_job ON workflow_steps(job_id);",
             )
             .map_err(CheckpointError::MigrateConversationSchema)?;
         Ok(())

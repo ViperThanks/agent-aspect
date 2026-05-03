@@ -691,12 +691,64 @@ else
 fi
 
 # ──────────────────────────────────────────────
+# 36-39: Workflow CRUD
+# ──────────────────────────────────────────────
+
+echo ""
+echo "=== test 36: POST /workflows without auth → 403 ==="
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+    -H "Content-Type: application/json" \
+    -d '{"name":"test","steps":[{"prompt":"hello"}]}' \
+    "$API/workflows")
+if [ "$HTTP_CODE" = "403" ]; then
+    echo "PASS"
+else
+    echo "FAIL: expected 403, got $HTTP_CODE"
+    FAILED=1
+fi
+
+echo ""
+echo "=== test 37: POST /workflows create ==="
+WF_RESP=$(curl -s -X POST \
+    -H "$AUTH" \
+    -H "Content-Type: application/json" \
+    -d '{"name":"Smoke Test WF","description":"test workflow","steps":[{"provider":"claude_code","prompt":"echo step1","context_strategy":"none"},{"provider":"claude_code","prompt":"echo step2","context_strategy":"last_50_lines"}]}' \
+    "$API/workflows")
+WF_ID=$(echo "$WF_RESP" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))")
+if [ -n "$WF_ID" ]; then
+    echo "PASS: created workflow $WF_ID"
+else
+    echo "FAIL: no workflow id in response: $WF_RESP"
+    FAILED=1
+fi
+
+echo ""
+echo "=== test 38: GET /workflows list ==="
+WF_LIST=$(curl -s -H "$AUTH" "$API/workflows")
+if echo "$WF_LIST" | python3 -c "import json,sys; d=json.load(sys.stdin); assert len(d['workflows'])>=1" 2>/dev/null; then
+    echo "PASS"
+else
+    echo "FAIL: workflow list empty or invalid: $WF_LIST"
+    FAILED=1
+fi
+
+echo ""
+echo "=== test 39: GET /workflows/:id detail ==="
+WF_DETAIL=$(curl -s -H "$AUTH" "$API/workflows/$WF_ID")
+if echo "$WF_DETAIL" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['id']=='$WF_ID'; assert len(d['steps'])==2; assert d['status']=='draft'" 2>/dev/null; then
+    echo "PASS"
+else
+    echo "FAIL: workflow detail invalid: $WF_DETAIL"
+    FAILED=1
+fi
+
+# ──────────────────────────────────────────────
 # Summary
 # ──────────────────────────────────────────────
 
 echo ""
 if [ "$FAILED" -eq 0 ]; then
-    echo "=== ALL 39 BRIDGE TESTS PASSED ==="
+    echo "=== ALL 43 BRIDGE TESTS PASSED ==="
 else
     echo "=== SOME BRIDGE TESTS FAILED ==="
     exit 1

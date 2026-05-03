@@ -46,10 +46,11 @@ pub const INDEX_HTML: &str = concat!(
     include_str!("ui/tabs/conversations.js"),
     include_str!("ui/tabs/events.js"),
     include_str!("ui/tabs/run.js"),
+    include_str!("ui/tabs/workflows.js"),
     // === 版本信息 ===
     "\nconsole.log('[agent-aspect-bridge] UI bundle v",
     env!("CARGO_PKG_VERSION"),
-    " shell=bridge loaded=marked,view_model,render,api_client,job_body,runtime_health,activity_segment');\n",
+    " shell=bridge loaded=marked,view_model,render,api_client,job_body,runtime_health,activity_segment,workflows');\n",
     "\nvar __BUILD_VERSION__ = '",
     env!("CARGO_PKG_VERSION"),
     "';\n",

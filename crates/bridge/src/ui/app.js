@@ -157,15 +157,15 @@ function setMode(m){
 function switchTab(tab){
   S.tab=tab;
   // Update sidebar
-  ['home','conv','events','run'].forEach(t=>{
+  ['home','conv','events','run','workflows'].forEach(t=>{
     const el=document.getElementById('nav-'+t);if(el)el.classList.toggle('active',tab===t);
   });
   // Update mobile tab bar
-  ['home','conv','events','run'].forEach(t=>{
+  ['home','conv','events','run','workflows'].forEach(t=>{
     const el=document.getElementById('tab-'+t);if(el)el.classList.toggle('active',tab===t);
   });
   // Show/hide views
-  ['home','conv','events','run'].forEach(t=>{
+  ['home','conv','events','run','workflows'].forEach(t=>{
     const el=document.getElementById(t+'-view');if(el)el.classList.toggle('hidden',tab!==t);
   });
   // Hide detail panel when switching tabs
@@ -178,6 +178,7 @@ function switchTab(tab){
     loadEvents({showLoading:S.firstLoad,onDone:jump?scrollToSelectedEvent:null});
   }
   else if(tab==='run'&&typeof loadRunContext==='function'){loadRunContext();loadJobHistory();}
+  else if(tab==='workflows'&&typeof loadWorkflows==='function'){loadWorkflows();}
 }
 
 // ===== Detail Panel =====
@@ -262,6 +263,13 @@ function startSSE(){
     // Refresh home convos
     if(S.tab==='home'&&typeof loadHome==='function')loadHome();
   });
+  es.addEventListener('workflow_status',function(e){
+    if(S.tab==='workflows'&&typeof loadWorkflowList==='function')loadWorkflowList();
+    if(S.tab==='workflows'&&WFS.selected&&typeof selectWorkflow==='function')selectWorkflow(WFS.selected.id);
+  });
+  es.addEventListener('workflow_step_status',function(){
+    if(S.tab==='workflows'&&WFS.selected&&typeof selectWorkflow==='function')selectWorkflow(WFS.selected.id);
+  });
   es.onerror=()=>{
     es.close();window._sse=null;
     if(timer)clearInterval(timer);
@@ -271,6 +279,7 @@ function startSSE(){
       if(S.tab==='home'&&typeof loadHome==='function')loadHome();
       else if(S.tab==='events'&&typeof loadEvents==='function')loadEvents();
       else if(S.tab==='conv'&&typeof loadConvList==='function'&&(!S.conv.detailCid))loadConvList();
+      else if(S.tab==='workflows'&&typeof loadWorkflowList==='function')loadWorkflowList();
     },30000);
     setTimeout(()=>{if(S.token&&!window._sse)startSSE()},30000);
   };

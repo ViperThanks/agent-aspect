@@ -12,3 +12,4 @@ pub mod jobs;
 pub mod messages;
 pub mod suggestions;
 pub mod users;
+pub mod workflows;

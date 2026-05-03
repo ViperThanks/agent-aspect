@@ -11,3 +11,4 @@ pub mod relay_client;
 pub mod routes;
 pub mod sse;
 pub mod ui;
+pub mod workflows;

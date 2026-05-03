@@ -183,6 +183,30 @@ pub enum CheckpointError {
 
     #[error("update user failed: {0}")]
     UpdateUser(#[source] rusqlite::Error),
+
+    #[error("insert workflow failed: {0}")]
+    InsertWorkflow(#[source] rusqlite::Error),
+
+    #[error("query workflow failed: {0}")]
+    QueryWorkflow(#[source] rusqlite::Error),
+
+    #[error("update workflow failed: {0}")]
+    UpdateWorkflow(#[source] rusqlite::Error),
+
+    #[error("insert workflow step failed: {0}")]
+    InsertWorkflowStep(#[source] rusqlite::Error),
+
+    #[error("query workflow step failed: {0}")]
+    QueryWorkflowStep(#[source] rusqlite::Error),
+
+    #[error("update workflow step failed: {0}")]
+    UpdateWorkflowStep(#[source] rusqlite::Error),
+
+    #[error("workflow not running")]
+    WorkflowNotRunning,
+
+    #[error("workflow step dependency invalid: {0}")]
+    WorkflowStepDependency(String),
 }
 
 pub type CheckpointResult<T> = Result<T, CheckpointError>;

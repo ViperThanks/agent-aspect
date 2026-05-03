@@ -52,7 +52,7 @@ const AGGREGATION_WINDOW_SECS: i64 = 30;
 
 /// 读取并解析请求体为 JSON，失败时返回 400 错误响应。
 /// 所有 POST handler 共用，消除重复的 body-reading 样板代码。
-fn read_json_body(
+pub fn read_json_body(
     request: &mut tiny_http::Request,
 ) -> Result<serde_json::Value, tiny_http::ResponseBox> {
     let mut body = String::new();
