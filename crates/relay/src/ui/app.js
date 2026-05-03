@@ -760,50 +760,76 @@ function renderConvMessageList(id, total, keepScroll) {
 
 /**
  * 使用 activity_segment.js 将消息分组并渲染。
- * 手机端与桌面端一致：turn 标签统一使用 shared_ui 的 turnBannerLabel。
+ * 每个 tool run 独立显示 banner（自己的 duration/toolCount/phase）。
  */
 function buildRelayActivityHtml(messages) {
   if (!messages || !messages.length) return '';
   var segments = buildSegments(messages);
   var groups = buildTurnGroups(segments, false);
   var html = '';
+  var runIdx = 0;
   var cardIdx = 0;
 
   for (var g = 0; g < groups.length; g++) {
     var group = groups[g];
     if (group.userSeg) html += buildConvMessageHtml(group.userSeg.message);
 
-    var toolSegs = [];
-    for (var s = 0; s < group.segments.length; s++) {
-      if (group.segments[s].type !== 'user' && group.segments[s].type !== 'assistant') {
-        toolSegs.push(group.segments[s]);
-      }
-    }
+    var runs = buildToolRuns(group);
+    var segCursor = 0;
 
-    var turnOpened = false;
-    for (var i = 0; i < group.segments.length; i++) {
-      var seg = group.segments[i];
-      if (seg.type === 'assistant') {
-        if (turnOpened) { html += '</div></div>'; turnOpened = false; }
-        html += buildConvMessageHtml(seg.message);
-      } else if (seg.type === 'user') {
-        continue;
-      } else {
-        if (!turnOpened && toolSegs.length > 0) {
-          html += '<div class="act-turn act-settled">';
-          html += '<div class="act-turn-bar" onclick="toggleTurnBody(this)">';
-          html += turnBannerLabel(group);
-          html += '<span class="act-turn-chevron" id="act-turn-chevron-r' + g + '">&#x25B8;</span>';
-          html += '</div>';
-          html += '<div class="act-turn-body" id="act-turn-body-r' + g + '" style="display:none">';
-          turnOpened = true;
+    for (var r = 0; r < runs.length; r++) {
+      var run = runs[r];
+
+      // 渲染 run 之前的 chat segments
+      for (; segCursor < group.segments.length; segCursor++) {
+        var seg = group.segments[segCursor];
+        if (seg.type === 'assistant') {
+          html += buildConvMessageHtml(seg.message);
+        } else if (seg.type === 'user') {
+          continue;
+        } else {
+          break;
         }
-        html += renderSegmentCard(seg, 'r' + cardIdx);
+      }
+
+      // 渲染 tool run（使用 run 自身的 duration/toolCount/phase）
+      html += '<div class="act-turn act-settled">';
+      html += '<div class="act-turn-bar" onclick="toggleTurnBody(this)">';
+      html += turnBannerLabel(run);
+      html += '<span class="act-turn-chevron" id="act-turn-chevron-r' + runIdx + '">&#x25B8;</span>';
+      html += '</div>';
+      html += '<div class="act-turn-body" id="act-turn-body-r' + runIdx + '" style="display:none">';
+
+      for (var s = 0; s < run.segments.length; s++) {
+        html += renderSegmentCard(run.segments[s], 'r' + cardIdx);
         cardIdx++;
       }
+
+      html += '</div></div>';
+      runIdx++;
+
+      segCursor += run.segments.length;
+
+      // 渲染 run 之后的 chat segments
+      for (; segCursor < group.segments.length; segCursor++) {
+        var after = group.segments[segCursor];
+        if (after.type === 'assistant') {
+          html += buildConvMessageHtml(after.message);
+        } else if (after.type === 'user') {
+          continue;
+        } else {
+          break;
+        }
+      }
     }
 
-    if (turnOpened) { html += '</div></div>'; }
+    // 渲染末尾剩余 chat segments
+    for (; segCursor < group.segments.length; segCursor++) {
+      var tail = group.segments[segCursor];
+      if (tail.type === 'assistant') {
+        html += buildConvMessageHtml(tail.message);
+      }
+    }
   }
   return html;
 }

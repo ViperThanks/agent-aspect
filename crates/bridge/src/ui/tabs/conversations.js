@@ -662,8 +662,8 @@ function loadChatMessages(cid, opts) {
 
 /**
  * 使用 activity_segment.js 将消息分组并渲染。
- * 用户/助手消息用现有 chat bubble，连续工具消息合并为摘要卡片。
- * Turn 标签统一使用 shared_ui 的 turnBannerLabel。
+ * 每个 tool run 独立显示 banner（自己的 duration/toolCount/phase）。
+ * Run 用 runIdx/cardIdx 避免重复 DOM id。
  */
 function buildActivityHtml(messages) {
   if (!messages || !messages.length) return '';
@@ -671,51 +671,74 @@ function buildActivityHtml(messages) {
   var groups = buildTurnGroups(segments, false);
   var tsState = { last: '' };
   var html = '';
-  var toolCardIdx = 0;
+  var runIdx = 0;
+  var cardIdx = 0;
 
   for (var g = 0; g < groups.length; g++) {
     var group = groups[g];
 
-    // 用户消息
     if (group.userSeg) {
       html += buildChatMessageHtml(group.userSeg.message, tsState);
     }
 
-    // 检查此 turn 是否有工具活动
-    var toolSegs = [];
-    for (var s = 0; s < group.segments.length; s++) {
-      if (group.segments[s].type !== 'user' && group.segments[s].type !== 'assistant') {
-        toolSegs.push(group.segments[s]);
-      }
-    }
+    // 按 assistant 边界切分 tool runs
+    var runs = buildToolRuns(group);
+    var segCursor = 0; // tracks position in group.segments for interleaving
 
-    var turnOpened = false;
+    for (var r = 0; r < runs.length; r++) {
+      var run = runs[r];
 
-    for (var i = 0; i < group.segments.length; i++) {
-      var seg = group.segments[i];
-      if (seg.type === 'assistant') {
-        // 关闭 turn body（如果有），渲染助手消息，重新打开
-        if (turnOpened) { html += '</div></div>'; turnOpened = false; }
-        html += buildChatMessageHtml(seg.message, tsState);
-      } else if (seg.type === 'user') {
-        continue;
-      } else {
-        // 第一个工具段前开启 turn banner — 使用 shared_ui 的统一标签
-        if (!turnOpened && toolSegs.length > 0) {
-          html += '<div class="act-turn act-settled">';
-          html += '<div class="act-turn-bar" onclick="toggleTurnBody(this)">';
-          html += turnBannerLabel(group);
-          html += '<span class="act-turn-chevron" id="act-turn-chevron-t' + g + '">&#x25B8;</span>';
-          html += '</div>';
-          html += '<div class="act-turn-body" id="act-turn-body-t' + g + '" style="display:none">';
-          turnOpened = true;
+      // 渲染 run 之前的 chat segments (assistant/user)
+      for (; segCursor < group.segments.length; segCursor++) {
+        var seg = group.segments[segCursor];
+        if (seg.type === 'assistant') {
+          html += buildChatMessageHtml(seg.message, tsState);
+        } else if (seg.type === 'user') {
+          continue;
+        } else {
+          break; // hit a tool segment — stop, this belongs to the run
         }
-        html += renderSegmentCard(seg, 'c' + toolCardIdx);
-        toolCardIdx++;
+      }
+
+      // 渲染 tool run（使用 run 自身的 duration/toolCount/phase）
+      html += '<div class="act-turn act-settled">';
+      html += '<div class="act-turn-bar" onclick="toggleTurnBody(this)">';
+      html += turnBannerLabel(run);
+      html += '<span class="act-turn-chevron" id="act-turn-chevron-r' + runIdx + '">&#x25B8;</span>';
+      html += '</div>';
+      html += '<div class="act-turn-body" id="act-turn-body-r' + runIdx + '" style="display:none">';
+
+      for (var s = 0; s < run.segments.length; s++) {
+        html += renderSegmentCard(run.segments[s], 'c' + cardIdx);
+        cardIdx++;
+      }
+
+      html += '</div></div>';
+      runIdx++;
+
+      // 跳过已渲染的 tool segments
+      segCursor += run.segments.length;
+
+      // 渲染 run 之后的 chat segments（直到下一个 run 或 group 结束）
+      for (; segCursor < group.segments.length; segCursor++) {
+        var after = group.segments[segCursor];
+        if (after.type === 'assistant') {
+          html += buildChatMessageHtml(after.message, tsState);
+        } else if (after.type === 'user') {
+          continue;
+        } else {
+          break;
+        }
       }
     }
 
-    if (turnOpened) { html += '</div></div>'; }
+    // 渲染 group 末尾剩余的 chat segments（没有 tool run 时的 assistant 消息）
+    for (; segCursor < group.segments.length; segCursor++) {
+      var tail = group.segments[segCursor];
+      if (tail.type === 'assistant') {
+        html += buildChatMessageHtml(tail.message, tsState);
+      }
+    }
   }
 
   return html;

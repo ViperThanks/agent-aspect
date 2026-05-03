@@ -738,6 +738,158 @@ assert(labelHtml.indexOf('验证结果') >= 0, 'turnBannerLabel: has phase label
 assert(labelHtml.indexOf('个动作') >= 0, 'turnBannerLabel: has 个动作');
 
 // ============================================================
+// buildToolRuns — 基本切分
+// ============================================================
+
+console.log('buildToolRuns basic');
+var trMsgs = [
+  { role: 'user', text: 'fix bug', timestamp: '2026-05-01T10:00:00Z', seq: 1 },
+  { role: 'tool_summary', tool_name: 'Read', tool_input_preview: 'a.rs', timestamp: '2026-05-01T10:00:01Z', seq: 2 },
+  { role: 'tool_summary', tool_name: 'Read', tool_input_preview: 'b.rs', timestamp: '2026-05-01T10:00:02Z', seq: 3 },
+  { role: 'tool_summary', tool_name: 'Grep', tool_input_preview: 'TODO', timestamp: '2026-05-01T10:00:03Z', seq: 4 },
+  { role: 'assistant', text: 'found it', timestamp: '2026-05-01T10:00:04Z', seq: 5 },
+  { role: 'tool_summary', tool_name: 'Edit', tool_input_preview: 'a.rs', timestamp: '2026-05-01T10:00:05Z', seq: 6 },
+  { role: 'assistant', text: 'done', timestamp: '2026-05-01T10:00:06Z', seq: 7 },
+];
+var trSegs = as.buildSegments(trMsgs);
+var trGroups = as.buildTurnGroups(trSegs, false);
+assertEq(trGroups.length, 1, 'one turn group');
+var runs = as.buildToolRuns(trGroups[0]);
+assertEq(runs.length, 2, 'two tool runs (split by assistant)');
+
+// First run: Read, Read, Grep → 3 tools
+assertEq(runs[0].toolCount, 3, 'run 1: 3 tools');
+assertEq(runs[0].duration, 2000, 'run 1: 2s duration (10:00:01 → 10:00:03)');
+assert(!runs[0].isRunning, 'run 1: not running');
+
+// Second run: Edit → 1 tool
+assertEq(runs[1].toolCount, 1, 'run 2: 1 tool');
+assertEq(runs[1].duration, 0, 'run 2: 0 duration (single item)');
+assert(!runs[1].isRunning, 'run 2: not running');
+
+// ============================================================
+// buildToolRuns — 每个 run 独立计数，不显示总数
+// ============================================================
+
+console.log('buildToolRuns per-run counts');
+var label1 = as.turnBannerLabel(runs[0]);
+assert(label1.indexOf('3 个动作') >= 0, 'run 1 banner: shows 3 个动作');
+assert(label1.indexOf('4') === -1, 'run 1 banner: no total 4');
+
+var label2 = as.turnBannerLabel(runs[1]);
+assert(label2.indexOf('1 个动作') >= 0, 'run 2 banner: shows 1 个动作');
+
+// ============================================================
+// buildToolRuns — 独立阶段标签
+// ============================================================
+
+console.log('buildToolRuns phase labels');
+// run 1: only file reads + search → 理解任务
+assert(label1.indexOf('理解任务') >= 0, 'run 1: phase is 理解任务');
+// run 2: only edit → 修改文件
+assert(label2.indexOf('修改文件') >= 0, 'run 2: phase is 修改文件');
+
+// ============================================================
+// buildToolRuns — 空 group / 无工具
+// ============================================================
+
+console.log('buildToolRuns edge cases');
+var emptyGroup = { segments: [], startTime: null, endTime: null, duration: 0, isRunning: false, toolCount: 0 };
+assertEq(as.buildToolRuns(emptyGroup).length, 0, 'empty group → 0 runs');
+
+var chatOnlyGroup = {
+  segments: [
+    { type: 'assistant', message: { text: 'hi' } },
+    { type: 'assistant', message: { text: 'bye' } },
+  ],
+  startTime: null, endTime: null, duration: 0, isRunning: false, toolCount: 0
+};
+assertEq(as.buildToolRuns(chatOnlyGroup).length, 0, 'chat-only group → 0 runs');
+
+// ============================================================
+// buildToolRuns — 无 assistant 切分（连续工具）
+// ============================================================
+
+console.log('buildToolRuns single run');
+var singleRunMsgs = [
+  { role: 'user', text: 'go', timestamp: '2026-05-01T10:00:00Z', seq: 1 },
+  { role: 'tool_summary', tool_name: 'Read', tool_input_preview: 'a.rs', timestamp: '2026-05-01T10:00:01Z', seq: 2 },
+  { role: 'tool_summary', tool_name: 'Bash', tool_input_preview: 'cargo test', timestamp: '2026-05-01T10:00:05Z', seq: 3 },
+];
+var srSegs = as.buildSegments(singleRunMsgs);
+var srGroups = as.buildTurnGroups(srSegs, false);
+var srRuns = as.buildToolRuns(srGroups[0]);
+assertEq(srRuns.length, 1, 'no assistant → single run');
+assertEq(srRuns[0].toolCount, 2, 'single run: 2 tools');
+assertEq(srRuns[0].duration, 4000, 'single run: 4s');
+
+// ============================================================
+// buildToolRuns — isRunning 继承
+// ============================================================
+
+console.log('buildToolRuns isRunning');
+var runningMsgs = [
+  { role: 'user', text: 'go', timestamp: '2026-05-01T10:00:00Z', seq: 1 },
+  { role: 'tool_summary', tool_name: 'Read', tool_input_preview: 'a.rs', timestamp: '2026-05-01T10:00:01Z', seq: 2 },
+];
+var runSegs2 = as.buildSegments(runningMsgs);
+var runGroups2 = as.buildTurnGroups(runSegs2, true);
+var runRuns2 = as.buildToolRuns(runGroups2[0]);
+assertEq(runRuns2.length, 1, 'running: single run');
+assert(runRuns2[0].isRunning, 'running: run inherits isRunning');
+
+// ============================================================
+// buildToolRuns — renderTurnBanner 默认 display:none
+// ============================================================
+
+console.log('buildToolRuns render defaults');
+var banner1 = as.renderTurnBanner(runs[0], 'tr0');
+assert(banner1.indexOf('display:none') >= 0, 'run 1 banner: body is display:none');
+assert(banner1.indexOf('3 个动作') >= 0, 'run 1 banner: has 3 个动作');
+
+var banner2 = as.renderTurnBanner(runs[1], 'tr1');
+assert(banner2.indexOf('display:none') >= 0, 'run 2 banner: body is display:none');
+assert(banner2.indexOf('1 个动作') >= 0, 'run 2 banner: has 1 个动作');
+
+// ============================================================
+// buildToolRuns — user→3 tools→assistant→1 tool→assistant 完整场景
+// ============================================================
+
+console.log('buildToolRuns full scenario: correct per-run counts');
+var fullMsgs = [
+  { role: 'user', text: 'fix', timestamp: '2026-05-01T10:00:00Z', seq: 1 },
+  { role: 'tool_summary', tool_name: 'Read', tool_input_preview: 'a.rs', timestamp: '2026-05-01T10:00:01Z', seq: 2 },
+  { role: 'tool_summary', tool_name: 'Read', tool_input_preview: 'b.rs', timestamp: '2026-05-01T10:00:02Z', seq: 3 },
+  { role: 'tool_summary', tool_name: 'Grep', tool_input_preview: 'TODO', timestamp: '2026-05-01T10:00:03Z', seq: 4 },
+  { role: 'assistant', text: 'found', timestamp: '2026-05-01T10:00:04Z', seq: 5 },
+  { role: 'tool_summary', tool_name: 'Edit', tool_input_preview: 'a.rs', timestamp: '2026-05-01T10:00:05Z', seq: 6 },
+  { role: 'assistant', text: 'done', timestamp: '2026-05-01T10:00:06Z', seq: 7 },
+];
+var fSegs = as.buildSegments(fullMsgs);
+var fGroups = as.buildTurnGroups(fSegs, false);
+var fRuns = as.buildToolRuns(fGroups[0]);
+
+// Must be 2 runs, not showing totals
+assertEq(fRuns.length, 2, 'full: 2 runs');
+assertEq(fRuns[0].toolCount, 3, 'full: run 1 has 3 tools');
+assertEq(fRuns[1].toolCount, 1, 'full: run 2 has 1 tool');
+
+// Banner labels show per-run counts
+var fl1 = as.turnBannerLabel(fRuns[0]);
+var fl2 = as.turnBannerLabel(fRuns[1]);
+assert(fl1.indexOf('3 个动作') >= 0, 'full: run 1 shows 3 个动作');
+assert(fl2.indexOf('1 个动作') >= 0, 'full: run 2 shows 1 个动作');
+// Must NOT show total 4
+assert(fl1.indexOf('4') === -1, 'full: run 1 does not show total 4');
+assert(fl2.indexOf('4') === -1, 'full: run 2 does not show total 4');
+
+// Both bodies display:none
+var fb1 = as.renderTurnBanner(fRuns[0], 'f0');
+var fb2 = as.renderTurnBanner(fRuns[1], 'f1');
+assert(fb1.indexOf('display:none') >= 0, 'full: run 1 body hidden');
+assert(fb2.indexOf('display:none') >= 0, 'full: run 2 body hidden');
+
+// ============================================================
 // 结果
 // ============================================================
 

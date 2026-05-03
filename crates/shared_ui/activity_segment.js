@@ -451,6 +451,70 @@ function buildTurnGroups(segments, isLastRunning) {
 }
 
 // ============================================================
+// Tool Run 切分
+// ============================================================
+
+/**
+ * 将一个 TurnGroup 按 assistant/user 边界切分为独立 tool run。
+ *
+ * 每个 run 是一段连续的非聊天 segment，拥有独立的
+ * segments / toolCount / startTime / endTime / duration / isRunning。
+ * 可直接传给 turnBannerLabel / renderTurnBanner。
+ *
+ * ToolRun: {
+ *   segments: Segment[],  // 只有 tool segments (explore/edit/tool)
+ *   toolCount: number,
+ *   startTime, endTime, duration,
+ *   isRunning: boolean
+ * }
+ *
+ * @param {TurnGroup} group
+ * @returns {Array<ToolRun>}
+ */
+function buildToolRuns(group) {
+  if (!group || !group.segments || !group.segments.length) return [];
+  var runs = [];
+  var current = null;
+
+  for (var i = 0; i < group.segments.length; i++) {
+    var seg = group.segments[i];
+    var isChat = (seg.type === 'user' || seg.type === 'assistant');
+
+    if (isChat) {
+      // chat segment → 关闭当前 run
+      if (current) { runs.push(current); current = null; }
+      continue;
+    }
+
+    // tool segment → 累积到当前 run
+    if (!current) {
+      current = { segments: [], toolCount: 0, startTime: null, endTime: null, duration: 0, isRunning: false };
+    }
+    current.segments.push(seg);
+    if (seg.items) current.toolCount += seg.items.length;
+
+    var segStart = seg.startTime;
+    var segEnd = seg.endTime;
+    if (segStart && (!current.startTime || segStart < current.startTime)) current.startTime = segStart;
+    if (segEnd && (!current.endTime || segEnd > current.endTime)) current.endTime = segEnd;
+  }
+
+  if (current) runs.push(current);
+
+  // 计算 duration 和 isRunning
+  for (var j = 0; j < runs.length; j++) {
+    var r = runs[j];
+    var sMs = r.startTime ? new Date(r.startTime).getTime() : 0;
+    var eMs = r.endTime ? new Date(r.endTime).getTime() : 0;
+    r.duration = eMs > sMs ? eMs - sMs : 0;
+    // 只有 turn 整体 running 且这是最后一个 run 时标记 running
+    r.isRunning = group.isRunning && (j === runs.length - 1);
+  }
+
+  return runs;
+}
+
+// ============================================================
 // 渲染 — Segment 摘要卡片
 // ============================================================
 
@@ -609,5 +673,6 @@ if (typeof module !== 'undefined' && module.exports) {
     maskSensitive: maskSensitive,
     classifyTurnPhase: classifyTurnPhase,
     turnBannerLabel: turnBannerLabel,
+    buildToolRuns: buildToolRuns,
   };
 }
