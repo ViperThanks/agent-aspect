@@ -1,0 +1,4 @@
+# Build artifacts — populated by copy-rust-binaries.sh
+*
+!.gitignore
+!.gitkeep
