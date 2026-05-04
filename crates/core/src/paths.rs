@@ -16,10 +16,42 @@ const AUDIT_DB_FILE: &str = "audit.db";
 const CONFIG_FILE: &str = "config.toml";
 const STATE_FILE: &str = "state.json";
 
+/// 获取可靠的 home 目录。
+///
+/// 策略：
+/// 1. $HOME 环境变量存在且非空 → 使用（测试环境通过此方式隔离）
+/// 2. 否则通过 getpwuid(getuid()) 获取真实用户目录
+/// 3. 都失败 → 回退到 /tmp
+fn home_dir() -> PathBuf {
+    let env_home = std::env::var("HOME").ok().filter(|h| !h.is_empty());
+    if let Some(h) = env_home {
+        return PathBuf::from(h);
+    }
+
+    #[cfg(unix)]
+    {
+        // Safety: getpwuid returns a thread-local or static buffer on success, null on failure.
+        // We read pw_dir immediately and convert to owned String before the pointer can be reused.
+        let pw_home = unsafe {
+            libc::getpwuid(libc::getuid())
+                .as_ref()
+                .and_then(|pw| {
+                    let c_str = std::ffi::CStr::from_ptr(pw.pw_dir).to_bytes();
+                    std::str::from_utf8(c_str).ok().filter(|s| !s.is_empty()).map(String::from)
+                })
+        };
+        if let Some(ph) = pw_home {
+            return PathBuf::from(ph);
+        }
+    }
+
+    PathBuf::from("/tmp")
+}
+
 /// 基础目录。优先 `~/.agent-aspect/`，不存在时回退 `~/.checkpoint/`。
 fn base_dir() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    let new_dir = PathBuf::from(&home).join(AGENT_ASPECT_DIR);
+    let home = home_dir();
+    let new_dir = home.join(AGENT_ASPECT_DIR);
     if new_dir.exists() {
         return new_dir;
     }
@@ -37,9 +69,9 @@ fn join_in_base(file_name: &str) -> PathBuf {
 
 /// 是否正在使用旧目录（doctor 用来提示迁移）。
 pub fn using_legacy_dir() -> bool {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    let new_dir = PathBuf::from(&home).join(AGENT_ASPECT_DIR);
-    let legacy_dir = PathBuf::from(&home).join(LEGACY_DIR);
+    let home = home_dir();
+    let new_dir = home.join(AGENT_ASPECT_DIR);
+    let legacy_dir = home.join(LEGACY_DIR);
     !new_dir.exists() && legacy_dir.exists()
 }
 
@@ -83,8 +115,7 @@ pub fn daemon_stderr_log_path() -> PathBuf {
 
 /// launchd plist 路径 — 用于 macOS 自动启动 daemon。
 pub fn launchd_plist_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home)
+    home_dir()
         .join("Library")
         .join("LaunchAgents")
         .join("com.agent-aspect.daemon.plist")
@@ -92,8 +123,7 @@ pub fn launchd_plist_path() -> PathBuf {
 
 /// bridge 的 launchd plist 路径。
 pub fn bridge_launchd_plist_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home)
+    home_dir()
         .join("Library")
         .join("LaunchAgents")
         .join("com.agent-aspect.bridge.plist")
@@ -136,18 +166,15 @@ pub fn bridge_state_path() -> PathBuf {
 
 /// Claude Code settings.json — 用于注入 hook 配置。
 pub fn claude_settings_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join(".claude").join("settings.json")
+    home_dir().join(".claude").join("settings.json")
 }
 
 /// Codex CLI hooks.json — 用于注入 hook 配置。
 pub fn codex_hooks_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join(".codex").join("hooks.json")
+    home_dir().join(".codex").join("hooks.json")
 }
 
 /// Kimi Code config.toml — 用于读取/注入 hook 配置。
 pub fn kimi_config_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join(".kimi").join("config.toml")
+    home_dir().join(".kimi").join("config.toml")
 }

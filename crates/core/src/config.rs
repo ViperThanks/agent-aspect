@@ -98,6 +98,11 @@ impl Config {
         let content =
             toml::to_string_pretty(self).map_err(crate::error::CheckpointError::SerializeConfig)?;
         std::fs::write(path, content).map_err(crate::error::CheckpointError::WriteConfig)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        }
         Ok(())
     }
 

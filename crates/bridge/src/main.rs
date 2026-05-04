@@ -20,6 +20,10 @@ use checkpoint_core::paths;
 use checkpoint_core::provider_registry::ProviderRegistry;
 use checkpoint_core::provider_resolver::ProviderResolver;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// 最大并发请求线程数。超出时返回 503。
+const MAX_CONCURRENT_REQUESTS: usize = 100;
 
 fn is_loopback(request: &tiny_http::Request) -> bool {
     use std::net::IpAddr;
@@ -175,7 +179,8 @@ fn main() {
         }
     }
 
-    // 9. HTTP 请求主循环：thread-per-request 并发处理
+    // 9. HTTP 请求主循环：thread-per-request + 并发上限
+    let active_count = Arc::new(AtomicUsize::new(0));
     for mut request in server.incoming_requests() {
         let queue_start = std::time::Instant::now();
         let path = request.url().split('?').next().unwrap_or("/").to_string();
@@ -215,6 +220,16 @@ fn main() {
         let job_runner = job_runner.clone();
         let workflow_runner = workflow_runner.clone();
         let token = token.clone();
+        let sem = active_count.clone();
+
+        if sem.fetch_add(1, Ordering::Relaxed) >= MAX_CONCURRENT_REQUESTS {
+            sem.fetch_sub(1, Ordering::Relaxed);
+            let _ = request.respond(routes::json_response(
+                503,
+                &serde_json::json!({"error": "server busy, try again"}),
+            ));
+            continue;
+        }
 
         std::thread::spawn(move || {
             let timing = routes::RequestTiming::new(queue_start);
@@ -736,6 +751,7 @@ fn main() {
             }
 
             timing.log(&method, &path);
+            sem.fetch_sub(1, Ordering::Relaxed);
         });
     }
 }

@@ -10,7 +10,7 @@
 //! 本身无状态，所有判定逻辑委托给 daemon。
 //!
 //! 不变量：
-//! - daemon 不可达时默认 Allow（不阻塞 agent 工作流）。
+//! - daemon 不可达时根据 mode 决策：Allow 模式放行，Guard/Learn/Paranoid 模式拒绝。
 //! - Metadata 请求（SessionStart/UserPromptSubmit）不输出 hook 响应。
 //! - 交互模式通过 /dev/tty 读取用户输入，不占用 stdin（stdin 被 hook payload 使用）。
 
@@ -32,13 +32,24 @@ fn main() {
     let agent = detect_agent(&payload);
     let sock_path = paths::socket_path();
 
-    // 连接 daemon；不可达时默认 Allow
+    // 连接 daemon；不可达时根据 mode 决策
     let mut stream = match UnixStream::connect(&sock_path) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("agent-aspect-hook: daemon not reachable: {e}");
-            // daemon not running -> allow by default, no output
-            return;
+            let mode = resolve_mode();
+            if mode == checkpoint_core::rule::Mode::Observer
+                || mode == checkpoint_core::rule::Mode::Autonomous
+            {
+                // Observer/Autonomous 模式下 daemon 不可达 -> 放行
+                return;
+            }
+            // Guard/Learn/Paranoid 模式下 daemon 不可达 -> 拒绝（fail-closed）
+            eprintln!(
+                "agent-aspect-hook: daemon unreachable in {mode:?} mode — denying tool call"
+            );
+            emit_hook_response(Action::Deny, "daemon unreachable");
+            std::process::exit(2);
         }
     };
 
@@ -116,6 +127,25 @@ fn main() {
             eprintln!("agent-aspect-hook: ipc read failed: {e}");
         }
     }
+}
+
+/// 读取当前 mode 配置。daemon 不可达时的 fail-closed 决策依赖此函数。
+fn resolve_mode() -> checkpoint_core::rule::Mode {
+    let config_path = checkpoint_core::config::Config::config_path();
+    if config_path.exists() {
+        if let Ok(c) = checkpoint_core::config::Config::load(&config_path) {
+            return c.mode;
+        }
+    }
+    // 环境变量覆盖
+    if let Some(raw) = checkpoint_core::env_compat::env_var("AGENT_ASPECT_MODE", "CHECKPOINT_MODE")
+    {
+        if let Ok(m) = raw.parse::<checkpoint_core::rule::Mode>() {
+            return m;
+        }
+    }
+    // 默认 Guard（最安全的默认值）
+    checkpoint_core::rule::Mode::Guard
 }
 
 /// 从 payload 中提取 hook_event_name 字段。

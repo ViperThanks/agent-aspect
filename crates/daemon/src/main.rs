@@ -474,6 +474,24 @@ fn handle_override(
     stream: &mut UnixStream,
     device_id: Option<&str>,
 ) {
+    // 校验 event_id 存在，防止幽灵记录注入
+    match store.event_exists(&msg.event_id) {
+        Ok(true) => {}
+        Ok(false) => {
+            log_info!("override rejected — event {} not found", &msg.event_id[..8.min(msg.event_id.len())]);
+            let resp = WireResponse {
+                event_id: Some(msg.event_id.clone()),
+                action: Action::Deny,
+                note: "event not found".to_string(),
+            };
+            write_wire_response(stream, &resp);
+            return;
+        }
+        Err(e) => {
+            log_info!("override event check failed: {e}");
+        }
+    }
+
     let now = chrono::Utc::now().to_rfc3339();
     let device_id = device_id.unwrap_or("local-hook");
     if let Err(e) = store.register_device(device_id, Some("agent-aspect-hook"), None, &now) {
