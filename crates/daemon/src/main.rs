@@ -180,8 +180,8 @@ fn handle_client(mut stream: UnixStream, store: &AuditStore, engine: &RuleEngine
                         if let Ok(true) =
                             store.has_learned_allow(event.agent.as_str(), &event.tool_name)
                         {
-                            decision.rule_id = Some("learned".to_string());
-                            decision.note = "Auto-allowed by learned rule".to_string();
+                            decision.rule_id = Some("[aspect-learned]".to_string());
+                            decision.note = "[aspect-learned] auto-allowed".to_string();
                         }
                     }
 
@@ -335,13 +335,13 @@ fn handle_metadata(
     write_wire_response(stream, &resp);
 }
 
-/// 处理 Claude Stop hook：找到对应 running job 并写入 stop_requested_at marker。
+/// 处理 Stop hook：找到对应 running job 并写入 stop_requested_at marker。
 ///
 /// 匹配策略（按优先级）：
 /// 1. provider + conversation_id（从 session_id 提取）
 /// 2. provider + project_path（fallback，仅当 conversation_id 不可用时）
 ///
-/// 找不到匹配 job 时只写 Stop audit，不误杀 running job。
+/// 找不到匹配 job 时静默返回，不写 audit，避免非 bridge job 产生的 Stop 事件造成 noise。
 fn handle_stop(
     payload: &str,
     agent: Option<&AgentId>,
@@ -357,27 +357,6 @@ fn handle_stop(
     };
     let device_id = device_id.unwrap_or("local-hook");
     let now = chrono::Utc::now().to_rfc3339();
-
-    // Always write a stop audit event
-    let event_id = uuid::Uuid::now_v7().to_string();
-    let _ = store.insert_event(
-        &event_id,
-        "stop",
-        "hook.stop",
-        agent_str,
-        "stop",
-        None,
-        &now,
-        payload,
-    );
-    let _ = store.insert_decision_for_device(
-        &event_id,
-        "allow",
-        None,
-        "stop hook received",
-        &now,
-        Some(device_id),
-    );
 
     // Extract conversation_id from payload for job matching
     let conversation_id = extract_conversation_id(agent_str, payload);
@@ -406,32 +385,75 @@ fn handle_stop(
         });
 
     if let Some(job) = matched_job {
+        // Only write audit when we actually matched a running job
+        let event_id = uuid::Uuid::now_v7().to_string();
+        let tool_name = if let Some(ref wf_id) = job.workflow_id {
+            format!("[aspect-stop-from-workflow-{wf_id}]")
+        } else {
+            "[aspect-stop]".to_string()
+        };
+        let _ = store.insert_event(
+            &event_id,
+            "stop",
+            "hook.stop",
+            agent_str,
+            &tool_name,
+            None,
+            &now,
+            payload,
+        );
+        let _ = store.insert_decision_for_device(
+            &event_id,
+            "allow",
+            None,
+            &tool_name,
+            &now,
+            Some(device_id),
+        );
         if let Err(e) = store.set_stop_requested_at(&job.id, &now) {
             log_info!("stop marker write failed for job {}: {e}", job.id);
         } else {
             log_info!(
-                "stop marker set for job {} (provider={}, conv={:?})",
+                "[aspect-stop] marker set for job {} (provider={}, conv={:?})",
                 job.id,
                 provider,
                 job.conversation_id
             );
         }
-    } else {
-        let project_path = checkpoint_core::conversation::extract_project_path(agent_str, payload);
-        log_info!(
-            "stop hook received but no matching running job found (provider={}, conv={:?}, project={:?})",
-            provider,
-            conversation_id,
-            project_path
-        );
-    }
 
-    let resp = WireResponse {
-        event_id: Some(event_id),
-        action: Action::Allow,
-        note: String::new(),
-    };
-    write_wire_response(stream, &resp);
+        // 如果 job 属于 manual 模式的 workflow，写入推进信号
+        if let Some(ref wf_id) = job.workflow_id {
+            if let Ok(Some(wf)) = store.get_workflow(wf_id) {
+                if wf.advance_mode == "manual" {
+                    let _ = store.insert_workflow_advance_signal(
+                        wf_id,
+                        None, // step_id 由 bridge 根据 workflow 状态推断
+                        agent_str,
+                        "stop",
+                        &now,
+                    );
+                    log_info!(
+                        "[aspect-stop] advance signal queued for workflow {} (manual mode)",
+                        wf_id
+                    );
+                }
+            }
+        }
+        let resp = WireResponse {
+            event_id: Some(event_id),
+            action: Action::Allow,
+            note: String::new(),
+        };
+        write_wire_response(stream, &resp);
+    } else {
+        // No matching running job — silent return, no audit noise
+        let resp = WireResponse {
+            event_id: None,
+            action: Action::Allow,
+            note: String::new(),
+        };
+        write_wire_response(stream, &resp);
+    }
 }
 
 /// 处理用户覆盖请求：记录覆盖决策到审计日志。
@@ -451,7 +473,7 @@ fn handle_override(
     if let Err(e) = store.insert_decision_for_device(
         &msg.event_id,
         msg.final_action.as_str(),
-        Some("user_override"),
+        Some("[aspect-user-override]"),
         &msg.note,
         &now,
         Some(device_id),

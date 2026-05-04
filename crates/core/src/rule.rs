@@ -97,14 +97,14 @@ impl RuleEngine {
                     event_id: event.id.clone(),
                     action: Action::Ask,
                     rule_id: Some("D999".to_string()),
-                    note: "paranoid mode: unclassified operation requires confirmation".to_string(),
+                    note: "[aspect-paranoid] unclassified operation requires confirmation".to_string(),
                 };
             }
             return Decision {
                 event_id: event.id.clone(),
                 action: Action::Allow,
                 rule_id: None,
-                note: "no rule matched".to_string(),
+                note: "[aspect-default] no rule matched".to_string(),
             };
         }
 
@@ -136,7 +136,7 @@ impl RuleEngine {
                 event_id: event.id.clone(),
                 action: Action::Allow,
                 rule_id: None,
-                note: "no rule matched".to_string(),
+                note: "[aspect-default] no rule matched".to_string(),
             };
         }
 
@@ -152,7 +152,7 @@ impl RuleEngine {
             .join("; ");
 
         let observer_note = if primary.default_action != Action::Allow {
-            format!("[observer] would be {}: {}", primary.default_action, note)
+            format!("[aspect-observer] would be {}: {}", primary.default_action, note)
         } else {
             note
         };
