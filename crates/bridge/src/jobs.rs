@@ -394,6 +394,7 @@ impl JobRunner {
                     project_path,
                     conversation_id,
                     prompt,
+                    None,
                 )
                 .map_err(|e| SubmitError::Fatal(format!("insert job: {e}")))?;
 
@@ -432,6 +433,7 @@ impl JobRunner {
                 project_path,
                 conversation_id,
                 prompt,
+                None,
             )
             .map_err(|e| SubmitError::Fatal(format!("insert job: {e}")))?;
 
@@ -444,14 +446,14 @@ impl JobRunner {
         }
 
         // Audit
-        let audit_note = format!("job submitted: {kind}");
+        let audit_note = format!("[aspect-job] submitted: {kind}");
         let event_id = uuid::Uuid::now_v7().to_string();
         let _ = store.insert_event(
             &event_id,
             "before",
-            "job.submit",
+            "[aspect-job.submit]",
             "bridge",
-            "remote_job",
+            "[aspect-remote-job]",
             None,
             &now,
             &format!("{{\"job_id\":\"{job_id}\",\"kind\":\"{kind}\"}}"),
@@ -521,8 +523,9 @@ impl JobRunner {
     /// 与 submit() 的区别：
     /// - 跳过并发检查：先等前一个 job 完成（via completion channel），再提交
     /// - 跳过 runtime drift / resume cost guard：workflow 是程序编排
-    /// - 跳过 audit 事件：workflow step 不需要设备归因
     /// - 同步等待：阻塞直到 exec_job 完成
+    ///
+    /// Audit：当 workflow_id 有值时，写入 `[aspect-prompt-submit-from-workflow-{id}]` 事件。
     pub fn submit_workflow_step(
         &self,
         step_kind: &str,
@@ -530,6 +533,7 @@ impl JobRunner {
         project_path: Option<&str>,
         prompt: &str,
         conversation_id: Option<&str>,
+        workflow_id: Option<&str>,
     ) -> Result<String, String> {
         // 1. 等前一个 job 完成（如果有）
         {
@@ -599,7 +603,32 @@ impl JobRunner {
             project_path,
             conversation_id,
             Some(prompt),
+            workflow_id,
         ).map_err(|e| format!("insert job: {e}"))?;
+
+        // 5a. 审计：workflow step job 提交
+        if let Some(wf_id) = workflow_id {
+            let event_id = uuid::Uuid::now_v7().to_string();
+            let tool_name = format!("[aspect-prompt-submit-from-workflow-{wf_id}]");
+            let _ = store.insert_event(
+                &event_id,
+                "before",
+                &tool_name,
+                provider,
+                &tool_name,
+                None,
+                &now,
+                &format!("{{\"job_id\":\"{job_id}\",\"workflow_id\":\"{wf_id}\",\"step_kind\":\"{step_kind}\"}}"),
+            );
+            let _ = store.insert_decision_for_device(
+                &event_id,
+                "allow",
+                None,
+                &tool_name,
+                &now,
+                Some("bridge"),
+            );
+        }
 
         // 6. 创建 completion channel
         let (completion_tx, completion_rx) = std::sync::mpsc::sync_channel::<()>(1);
@@ -1383,7 +1412,7 @@ fn exec_job(
     // Write stop marker log entry
     if stop_requested {
         let mut lw = log_writer.lock().unwrap();
-        lw.write_system_no_activity("[stop hook received — converging job]");
+        lw.write_system_no_activity("[aspect-stop] hook received — converging job");
     }
 
     // Clear running state (save completion_tx for later signal)
@@ -1411,7 +1440,7 @@ fn exec_job(
             "failed",
             &now,
             None,
-            Some("stop hook received"),
+            Some("[aspect-stop] hook received"),
             Some("stop_requested"),
         );
     } else if let Some(status) = exit_status {
@@ -1937,6 +1966,7 @@ mod tests {
                     Some("/tmp"),
                     None,
                     Some("test"),
+                    None,
                 )
                 .unwrap();
         }
@@ -2149,6 +2179,8 @@ pub fn handle_get_jobs(request: &tiny_http::Request, runner: &JobRunner) -> tiny
                         "failure_reason": j.failure_reason,
                         "last_log_at": j.last_log_at,
                         "stop_requested_at": j.stop_requested_at,
+                        "completed_reason": j.completed_reason,
+                        "workflow_id": j.workflow_id,
                     })
                 })
                 .collect();
@@ -2186,6 +2218,8 @@ pub fn handle_get_job(job_id: &str, runner: &JobRunner) -> tiny_http::ResponseBo
                 "failure_reason": j.failure_reason,
                 "last_log_at": j.last_log_at,
                 "stop_requested_at": j.stop_requested_at,
+                "completed_reason": j.completed_reason,
+                "workflow_id": j.workflow_id,
             }),
         ),
         Err(e) => json_response(500, &serde_json::json!({"error": e})),

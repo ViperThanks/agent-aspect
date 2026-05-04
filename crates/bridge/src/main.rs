@@ -539,6 +539,18 @@ fn main() {
                         }
                     }
                 }
+                (_, true, p) if p.starts_with("/workflows/") && p.ends_with("/next-step") => {
+                    if !auth::check_auth(&request, &token) {
+                        routes::json_response(403, &serde_json::json!({"error": "unauthorized"}))
+                    } else {
+                        let wf_id = &p["/workflows/".len()..p.len() - "/next-step".len()];
+                        if wf_id.is_empty() {
+                            routes::json_response(400, &serde_json::json!({"error": "missing workflow id"}))
+                        } else {
+                            workflows::handle_post_workflow_next_step(wf_id, &ctx)
+                        }
+                    }
+                }
                 (_, true, p) if p.starts_with("/workflows/") && p.ends_with("/cancel") => {
                     if !auth::check_auth(&request, &token) {
                         routes::json_response(403, &serde_json::json!({"error": "unauthorized"}))

@@ -818,7 +818,7 @@ pub fn handle_post_decide(
         if let Err(e) = store.insert_decision_for_device(
             event_id,
             action,
-            Some("user_override"),
+            Some("[aspect-user-override]"),
             note,
             &timestamp,
             Some(&device_id),
@@ -850,7 +850,7 @@ pub fn handle_post_decide(
         &serde_json::json!({
             "event_id": event_id,
             "action": action,
-            "rule_id": "user_override",
+            "rule_id": "[aspect-user-override]",
             "note": note,
             "device_id": device_id,
         }),

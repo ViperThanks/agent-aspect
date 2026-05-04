@@ -62,12 +62,12 @@ impl WorkflowRunner {
         let store = AuditStore::open(&self.db_path)
             .map_err(|e| format!("open db: {e}"))?;
 
-        // 验证 workflow 存在且状态为 draft 或 failed（允许重试）
+        // 验证 workflow 存在且状态为 draft / failed / cancelled / paused（允许重试和恢复）
         let wf = store.get_workflow(workflow_id)
             .map_err(|e| format!("query workflow: {e}"))?
             .ok_or("workflow not found")?;
 
-        if wf.status != "draft" && wf.status != "failed" && wf.status != "cancelled" {
+        if wf.status != "draft" && wf.status != "failed" && wf.status != "cancelled" && wf.status != "paused" {
             return Err(format!("workflow status '{}' cannot be started", wf.status));
         }
 
@@ -245,6 +245,12 @@ fn execute_workflow_inner(
     let steps = store.get_workflow_steps(workflow_id)
         .map_err(|e| ExecuteError::Db(e.to_string()))?;
 
+    // 读取 advance_mode（manual 模式下 step 完成后需要暂停等待信号）
+    let advance_mode = store.get_workflow(workflow_id)
+        .map_err(|e| ExecuteError::Db(e.to_string()))?
+        .map(|wf| wf.advance_mode)
+        .unwrap_or_else(|| "auto".to_string());
+
     let mut previous_logs: Option<String> = None;
     // 记录每个 step_order 对应的日志，支持 context_from_step 按步索引读取
     let mut step_logs: HashMap<i64, String> = HashMap::new();
@@ -300,6 +306,7 @@ fn execute_workflow_inner(
             project_path,
             &prompt,
             None, // conversation_id: workflow steps 每步独立
+            Some(workflow_id),
         );
 
         match job_result {
@@ -340,6 +347,46 @@ fn execute_workflow_inner(
                         "status": "succeeded"
                     }).to_string(),
                 });
+
+                // manual 模式：如果还有未完成的步骤，暂停等待推进信号
+                if advance_mode == "manual" {
+                    let has_pending = steps.iter().any(|s| {
+                        s.step_order > step.step_order && s.status != "succeeded"
+                    });
+                    if has_pending {
+                        let now = chrono::Utc::now().to_rfc3339();
+                        store.update_workflow_status(workflow_id, "paused", &now)
+                            .map_err(|e| ExecuteError::Db(e.to_string()))?;
+                        broadcaster.lock().unwrap().broadcast(crate::sse::SseEvent {
+                            event_type: "workflow_status".to_string(),
+                            data: workflow_id.to_string(),
+                        });
+
+                        // 轮询等待 advance signal（2s 间隔）
+                        loop {
+                            if cancel_flag.load(Ordering::SeqCst) {
+                                return Err(ExecuteError::Cancelled);
+                            }
+                            if let Ok(signals) = store.poll_workflow_advance_signals(workflow_id) {
+                                if let Some(sig) = signals.first() {
+                                    let now2 = chrono::Utc::now().to_rfc3339();
+                                    let _ = store.consume_workflow_advance_signal(sig.id, &now2);
+                                    break;
+                                }
+                            }
+                            std::thread::sleep(std::time::Duration::from_secs(2));
+                        }
+
+                        // 恢复 running
+                        let now = chrono::Utc::now().to_rfc3339();
+                        store.update_workflow_status(workflow_id, "running", &now)
+                            .map_err(|e| ExecuteError::Db(e.to_string()))?;
+                        broadcaster.lock().unwrap().broadcast(crate::sse::SseEvent {
+                            event_type: "workflow_status".to_string(),
+                            data: workflow_id.to_string(),
+                        });
+                    }
+                }
             }
             Err(e) => {
                 let now = chrono::Utc::now().to_rfc3339();
@@ -411,7 +458,7 @@ fn build_step_prompt(step: &WorkflowStepRow, previous_logs: Option<&str>) -> Str
 pub fn handle_post_workflows(
     ctx: &crate::context::AppContext,
     request: &mut tiny_http::Request,
-    workflow_runner: &Arc<WorkflowRunner>,
+    _workflow_runner: &Arc<WorkflowRunner>,
 ) -> tiny_http::ResponseBox {
     let body: serde_json::Value = match read_json_body(request) {
         Ok(v) => v,
@@ -474,7 +521,7 @@ pub fn handle_post_workflows(
         }
     }
 
-    json_response(201, &serde_json::json!({"id": wf_id, "status": "draft"}))
+    json_response(201, &serde_json::json!({"id": wf_id, "status": "draft", "advance_mode": "auto"}))
 }
 
 /// GET /workflows — 列出所有工作流。
@@ -505,6 +552,7 @@ pub fn handle_get_workflows(
             "name": wf.name,
             "description": wf.description,
             "status": wf.status,
+            "advance_mode": wf.advance_mode,
             "created_at": wf.created_at,
             "updated_at": wf.updated_at,
             "step_counts": {
@@ -565,6 +613,7 @@ pub fn handle_get_workflow(
         "name": wf.name,
         "description": wf.description,
         "status": wf.status,
+        "advance_mode": wf.advance_mode,
         "created_at": wf.created_at,
         "updated_at": wf.updated_at,
         "steps": step_values,
@@ -608,9 +657,19 @@ pub fn handle_put_workflow(
     let final_name = if name.is_empty() { &wf.name } else { name };
     let final_desc = if description.is_empty() && body.get("description").is_none() { &wf.description } else { description };
 
+    let advance_mode = body.get("advance_mode").and_then(|v| v.as_str());
+
     match store.update_workflow(workflow_id, final_name, final_desc, &now) {
         Ok(0) => json_response(400, &serde_json::json!({"error": "cannot edit workflow in current state"})),
-        Ok(_) => json_response(200, &serde_json::json!({"id": workflow_id, "status": "updated"})),
+        Ok(_) => {
+            // 如果传了 advance_mode，单独更新
+            if let Some(mode) = advance_mode {
+                if mode == "auto" || mode == "manual" {
+                    let _ = store.update_workflow_advance_mode(workflow_id, mode, &now);
+                }
+            }
+            json_response(200, &serde_json::json!({"id": workflow_id, "status": "updated"}))
+        }
         Err(e) => json_response(500, &serde_json::json!({"error": e.to_string()})),
     }
 }
@@ -700,6 +759,32 @@ pub fn handle_post_workflow_run(
                 json_response(400, &serde_json::json!({"error": e}))
             }
         }
+    }
+}
+
+/// POST /workflows/:id/next-step — 手动触发 workflow 下一步（manual 模式备用）。
+/// 写入一个 next_step 信号，workflow 执行线程轮询到后会继续。
+pub fn handle_post_workflow_next_step(
+    workflow_id: &str,
+    ctx: &crate::context::AppContext,
+) -> tiny_http::ResponseBox {
+    let store = ctx.store.lock().unwrap();
+    let wf = match store.get_workflow(workflow_id) {
+        Ok(Some(wf)) => wf,
+        Ok(None) => return json_response(404, &serde_json::json!({"error": "workflow not found"})),
+        Err(e) => return json_response(500, &serde_json::json!({"error": e.to_string()})),
+    };
+
+    if wf.status != "paused" && wf.status != "running" {
+        return json_response(400, &serde_json::json!({
+            "error": format!("workflow status '{}' cannot advance", wf.status)
+        }));
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    match store.insert_workflow_advance_signal(workflow_id, None, "bridge_ui", "next_step", &now) {
+        Ok(_) => json_response(200, &serde_json::json!({"status": "signal_queued"})),
+        Err(e) => json_response(500, &serde_json::json!({"error": e.to_string()})),
     }
 }
 
