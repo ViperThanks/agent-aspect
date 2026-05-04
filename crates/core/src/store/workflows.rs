@@ -348,6 +348,16 @@ impl AuditStore {
         Ok(rows)
     }
 
+    /// 统计工作流总数。
+    pub fn count_workflows(&self) -> CheckpointResult<i64> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM workflows",
+            [],
+            |row| row.get(0),
+        ).map_err(CheckpointError::QueryWorkflow)?;
+        Ok(count)
+    }
+
     /// 统计工作流中各状态的步骤数。(total, succeeded, failed, pending, skipped)
     pub fn workflow_step_counts(&self, workflow_id: &str) -> CheckpointResult<(i64, i64, i64, i64, i64)> {
         let (total, succeeded, failed, pending, skipped): (i64, i64, i64, i64, i64) = self.conn.query_row(
@@ -557,6 +567,20 @@ mod tests {
         assert_eq!(store.get_workflow_step("s2").unwrap().unwrap().status, "failed");
         assert_eq!(store.get_workflow_step("s3").unwrap().unwrap().status, "cancelled");
         assert_eq!(store.get_workflow_step("s4").unwrap().unwrap().status, "cancelled");
+    }
+
+    #[test]
+    fn count_workflows_returns_total() {
+        let store = AuditStore::open_in_memory().unwrap();
+        let now = "2026-05-04T10:00:00Z";
+
+        assert_eq!(store.count_workflows().unwrap(), 0);
+
+        store.insert_workflow("wf1", "A", "", now).unwrap();
+        assert_eq!(store.count_workflows().unwrap(), 1);
+
+        store.insert_workflow("wf2", "B", "", now).unwrap();
+        assert_eq!(store.count_workflows().unwrap(), 2);
     }
 
     #[test]
