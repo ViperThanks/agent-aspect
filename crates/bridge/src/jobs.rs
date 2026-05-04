@@ -710,6 +710,10 @@ impl JobRunner {
                         if rj.job_id == job_id {
                             kill_process_group_or_child(j.process_group_id, j.pid, &mut rj.child);
                             let _ = rj.child.wait();
+                            // Send completion signal before clearing (for workflow step sync)
+                            if let Some(ref tx) = rj.completion_tx {
+                                let _ = tx.send(());
+                            }
                             *guard = None;
                             killed = true;
                         }
@@ -1068,12 +1072,13 @@ fn exec_job(
     running: &Arc<Mutex<Option<RunningJob>>>,
     broadcaster: &SharedBroadcaster,
     runner_id: &str,
-    completion_tx: Option<std::sync::mpsc::SyncSender<()>>,
+    mut completion_tx: Option<std::sync::mpsc::SyncSender<()>>,
 ) {
     let store = match AuditStore::open(db_path) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("agent-aspect-bridge: job {job_id}: open db: {e}");
+            let _ = completion_tx.take().map(|tx| tx.send(()));
             return;
         }
     };
@@ -1092,11 +1097,13 @@ fn exec_job(
             eprintln!(
                 "agent-aspect-bridge: job {job_id}: already cancelled/terminal, skipping execution"
             );
+            let _ = completion_tx.take().map(|tx| tx.send(()));
             return;
         }
         Ok(_) => {}
         Err(e) => {
             eprintln!("agent-aspect-bridge: job {job_id}: mark started: {e}");
+            let _ = completion_tx.take().map(|tx| tx.send(()));
             return;
         }
     }
@@ -1158,6 +1165,7 @@ fn exec_job(
                 })
                 .to_string(),
             });
+            let _ = completion_tx.take().map(|tx| tx.send(()));
             return;
         }
     };
@@ -1378,21 +1386,11 @@ fn exec_job(
         lw.write_system_no_activity("[stop hook received — converging job]");
     }
 
-    // Send completion signal (for workflow step synchronization) before clearing running
-    {
-        let guard = running.lock().unwrap();
-        if let Some(ref job) = *guard {
-            if let Some(ref tx) = job.completion_tx {
-                let _ = tx.send(());
-            }
-        }
-    }
-
-    // Clear running state
-    {
+    // Clear running state (save completion_tx for later signal)
+    let saved_completion_tx = {
         let mut guard = running.lock().unwrap();
-        *guard = None;
-    }
+        guard.take().and_then(|rj| rj.completion_tx)
+    };
 
     // Check if cancel already wrote a terminal state — status guard prevents overwrite
     let now = chrono::Utc::now().to_rfc3339();
@@ -1484,6 +1482,11 @@ fn exec_job(
     });
 
     crate::routes::invalidate_overview_cache();
+
+    // Send completion signal AFTER DB status is finalized (for workflow step sync)
+    if let Some(tx) = saved_completion_tx {
+        let _ = tx.send(());
+    }
 }
 
 /// job 完成后，如果是 agent_prompt 且 provider 输出了 conversation_id，

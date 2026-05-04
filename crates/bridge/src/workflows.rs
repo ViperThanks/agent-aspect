@@ -184,7 +184,7 @@ fn execute_workflow(
     job_runner: &Arc<JobRunner>,
     cancel_flag: &Arc<AtomicBool>,
 ) {
-    let result = execute_workflow_inner(workflow_id, db_path, running, broadcaster, job_runner, cancel_flag);
+    let result = execute_workflow_inner(workflow_id, db_path, broadcaster, job_runner, cancel_flag);
 
     // 清理运行状态
     *running.lock().unwrap() = None;
@@ -235,7 +235,6 @@ impl std::fmt::Display for ExecuteError {
 fn execute_workflow_inner(
     workflow_id: &str,
     db_path: &PathBuf,
-    _running: &Arc<Mutex<Option<RunningWorkflow>>>,
     broadcaster: &SharedBroadcaster,
     job_runner: &Arc<JobRunner>,
     cancel_flag: &Arc<AtomicBool>,
@@ -298,9 +297,21 @@ fn execute_workflow_inner(
                 let store = AuditStore::open(db_path).map_err(|e| ExecuteError::Db(e.to_string()))?;
                 let _ = store.update_workflow_step_job(&step.id, &job_id);
 
-                let now = chrono::Utc::now().to_rfc3339();
-                store.update_workflow_step_status(&step.id, "succeeded", Some(&now))
+                // 读取 job 实际结果（completion signal 在 DB 写入后发送，此时状态已 finalized）
+                let job = store.get_job(&job_id)
                     .map_err(|e| ExecuteError::Db(e.to_string()))?;
+                let job_status = job.as_ref().map(|j| j.status.as_str()).unwrap_or("failed");
+                let failure_reason = job.as_ref().and_then(|j| j.failure_reason.clone());
+
+                let now = chrono::Utc::now().to_rfc3339();
+                let step_status = if job_status == "succeeded" { "succeeded" } else { "failed" };
+                store.update_workflow_step_status(&step.id, step_status, Some(&now))
+                    .map_err(|e| ExecuteError::Db(e.to_string()))?;
+
+                if step_status == "failed" {
+                    let reason = failure_reason.unwrap_or_default();
+                    return Err(ExecuteError::JobFailed(reason));
+                }
 
                 // 读取日志作为下一步上下文
                 previous_logs = Some(read_job_logs_for_context(
