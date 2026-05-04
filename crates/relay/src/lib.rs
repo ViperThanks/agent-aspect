@@ -51,8 +51,12 @@ pub struct AppState {
     pub registered_tokens: Mutex<HashMap<String, StoredTokens>>,
     /// 持久化文件路径。
     pub registered_tokens_path: PathBuf,
-    /// 注册接口速率限制器。
-    pub register_limiter: register::SharedRateLimiter,
+    /// 注册接口速率限制器（per-IP）。
+    pub register_limiter: register::SharedIpRateLimiter,
+    /// per-client（per-sid）代理请求速率限制器。
+    pub client_limiter: register::SharedClientRateLimiter,
+    /// jti 重放缓存：jti → 首次使用时间，防止同一 token 短期内被重放。
+    pub jti_cache: Mutex<HashMap<String, std::time::Instant>>,
 }
 
 /// 获取 relay 状态目录（~/.agent-aspect-relay/）。
@@ -290,7 +294,9 @@ pub async fn run_server() {
         setup_token,
         registered_tokens: Mutex::new(registered_tokens),
         registered_tokens_path,
-        register_limiter: Arc::new(Mutex::new(register::RateLimiter::new())),
+        register_limiter: Arc::new(Mutex::new(register::IpRateLimiter::new())),
+        client_limiter: Arc::new(Mutex::new(register::ClientRateLimiter::new())),
+        jti_cache: Mutex::new(HashMap::new()),
     });
 
     let app = server::app(state);
@@ -304,7 +310,12 @@ pub async fn run_server() {
 
     eprintln!("agent-aspect-relay: listening on {listen_addr}");
 
-    axum::serve(listener, app).await.unwrap_or_else(|e| {
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .unwrap_or_else(|e| {
         eprintln!("agent-aspect-relay: server error: {e}");
         std::process::exit(1);
     });

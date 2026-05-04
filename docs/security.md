@@ -30,7 +30,12 @@
 - Does not log request bodies, tokens, or prompts.
 - POST bodies are capped at 1 MiB.
 - Per-session pending requests are capped at 100.
-- Registration is rate-limited (10 attempts per 60 seconds).
+- Registration is rate-limited per-IP (10 attempts per 60 seconds per source IP).
+- Proxy endpoints are rate-limited per-client (60 requests per 60 seconds per sid).
+- Maximum 10 registered devices per setup_token.
+- WebSocket connections must register within 10 seconds or be disconnected.
+- Heartbeat monitors pong responses; connections missing 3 consecutive pongs (15 seconds) are terminated.
+- Token jti is tracked for 5 minutes to prevent replay.
 
 ## Rules and Enforcement
 
@@ -68,11 +73,13 @@ Device IDs record which browser or hook made a decision. They are for audit attr
 
 | Threat | Mitigation |
 |--------|------------|
-| Unauthorized registration | Requires one-time `setup_token`. Rate-limited to 10/minute. |
-| Token replay | Tokens are HMAC-signed with expiry. Old tokens are pruned on load. |
+| Unauthorized registration | Requires one-time `setup_token`. Per-IP rate-limited to 10/minute. Max 10 devices per token. |
+| Token replay | HMAC-signed with expiry + jti replay cache (5 min). Old tokens pruned on load. |
 | Eavesdropping on public internet | Must use HTTPS/WSS. The relay does not handle TLS itself. |
 | Relay operator reads traffic | Relay sees proxied request/response bodies. Do not use an untrusted relay. |
 | Brute force token | 64-hex-char setup_token (256 bits). Not feasibly brute-forceable. |
+| Connection hanging / DoS | WS connections must register within 10s. Heartbeat detects dead connections (3 missed pongs = disconnect). |
+| Proxy abuse / excessive requests | Per-client rate limit (60/min per sid). Per-session pending request cap (100). |
 
 ## Permission Inheritance
 

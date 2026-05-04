@@ -17,7 +17,13 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::response::IntoResponse;
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
+
+/// 心跳 ping 间隔（秒）。
+const HB_INTERVAL_SECS: u64 = 5;
+/// 连续未收到 pong 的最大次数，超过则判定连接死亡并断开。
+const MAX_MISSED_PONGS: u32 = 3;
 
 /// WebSocket 升级入口。axum 自动处理 HTTP → WS 协议升级。
 pub async fn ws_handler(
@@ -60,6 +66,11 @@ async fn handle_ws(socket: WebSocket, state: Arc<crate::AppState>) {
     let registry_read = state.registry.clone();
     let registry_write = state.registry.clone();
 
+    // pong 状态标志：read_task 收到 pong 时设为 true，heartbeat_task 每轮检查并重置
+    let pong_received = Arc::new(AtomicBool::new(true));
+    let pong_received_read = pong_received.clone();
+    let pong_received_hb = pong_received.clone();
+
     // 读任务：从 Mac Bridge 接收消息并分发
     let read_task = tokio::spawn(async move {
         while let Some(msg) = ws_stream.next().await {
@@ -84,13 +95,14 @@ async fn handle_ws(socket: WebSocket, state: Arc<crate::AppState>) {
                                     .complete_request(&token, &rid, resp);
                             }
                         }
-                        "pong" => { /* 心跳确认，无需处理 */ }
+                        "pong" => {
+                            pong_received_read.store(true, Ordering::Relaxed);
+                        }
                         other => {
                             eprintln!(
                                 "agent-aspect-relay: unknown WS frame type '{other}' from sid {}...",
                                 &token[..8.min(token.len())]
                             );
-                            // 不断开连接，但记录告警。Bridge 可能是旧版本，断开会导致服务中断。
                         }
                     }
                 }
@@ -115,12 +127,14 @@ async fn handle_ws(socket: WebSocket, state: Arc<crate::AppState>) {
         }
     });
 
-    // 心跳任务：每 5 秒发送 ping 帧，用于检测连接活性
+    // 心跳任务：每 HB_INTERVAL_SECS 秒发送 ping 帧，检测连接活性。
+    // 连续 MAX_MISSED_PONGS 次未收到 pong 则判定连接死亡，触发断连。
     let hb_token = sid.clone();
     let hb_registry = state.registry.clone();
     let (hb_cancel_tx, mut hb_cancel_rx) = tokio::sync::oneshot::channel::<()>();
     let heartbeat_task = tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(HB_INTERVAL_SECS));
+        let mut missed_count: u32 = 0;
         // 跳过首次立即触发，等待第一个间隔
         tokio::select! {
             _ = &mut hb_cancel_rx => { return; },
@@ -128,6 +142,24 @@ async fn handle_ws(socket: WebSocket, state: Arc<crate::AppState>) {
         }
         loop {
             interval.tick().await;
+
+            // 检查上一轮 pong 状态
+            if pong_received_hb.swap(false, Ordering::Relaxed) {
+                missed_count = 0;
+            } else {
+                missed_count += 1;
+                if missed_count >= MAX_MISSED_PONGS {
+                    eprintln!(
+                        "agent-aspect-relay: WS heartbeat dead — {} missed pongs for sid {}...",
+                        missed_count,
+                        &hb_token[..8.min(hb_token.len())]
+                    );
+                    // 注销会话以触发整体清理（read_task/write_task 会随之退出）
+                    hb_registry.lock().await.unregister(&hb_token);
+                    break;
+                }
+            }
+
             let ping = serde_json::json!({
                 "type": "ping",
                 "timestamp": chrono::Utc::now().to_rfc3339(),
@@ -139,7 +171,6 @@ async fn handle_ws(socket: WebSocket, state: Arc<crate::AppState>) {
                     break;
                 }
             } else {
-                // sid 已被注销，停止心跳
                 break;
             }
         }
@@ -168,16 +199,37 @@ async fn handle_ws(socket: WebSocket, state: Arc<crate::AppState>) {
         .unregister_if_current(&token_write, &connection_id_cleanup);
 }
 
+/// WS 注册超时：连接建立后必须在此时限内发送 register 帧。
+const WS_REGISTER_TIMEOUT_SECS: u64 = 10;
+
 /// 等待 WebSocket 连接的第一条 register 帧，验证 mac_token 并返回 sid。
 ///
 /// 验证流程：消息类型必须为 "register" → mac_token 非空 → 签名有效 →
 /// 角色为 "mac" → sid 在已注册名册中。任一步失败则关闭连接。
+/// 超时未发送 register 帧则断开，防止连接悬挂 DoS。
 async fn wait_for_register(
     ws_stream: &mut (impl StreamExt<Item = Result<Message, axum::Error>> + Unpin),
     ws_sink: &mut (impl SinkExt<Message, Error = axum::Error> + Unpin),
     state: &Arc<crate::AppState>,
 ) -> Option<String> {
-    let msg = ws_stream.next().await?;
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(WS_REGISTER_TIMEOUT_SECS),
+        ws_stream.next(),
+    )
+    .await;
+
+    let msg = match result {
+        Ok(Some(msg)) => msg,
+        Ok(None) => {
+            let _ = ws_sink.close().await;
+            return None;
+        }
+        Err(_) => {
+            eprintln!("agent-aspect-relay: WS register timeout — closing connection");
+            let _ = ws_sink.close().await;
+            return None;
+        }
+    };
     let text = match msg {
         Ok(Message::Text(t)) => t,
         _ => {

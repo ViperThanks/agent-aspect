@@ -19,7 +19,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -27,27 +27,37 @@ use tokio::sync::Mutex;
 const REGISTER_RATE_LIMIT: usize = 10;
 /// 速率限制窗口时长（秒）。
 const REGISTER_RATE_WINDOW_SECS: u64 = 60;
+/// 单 setup_token 允许注册的最大设备数。
+const MAX_REGISTERED_DEVICES: usize = 10;
 
 /// 滑动窗口速率限制器。
 pub struct RateLimiter {
     attempts: VecDeque<std::time::Instant>,
+    limit: usize,
+    window_secs: u64,
 }
 
 impl RateLimiter {
     pub fn new() -> Self {
+        Self::with_params(REGISTER_RATE_LIMIT, REGISTER_RATE_WINDOW_SECS)
+    }
+
+    pub fn with_params(limit: usize, window_secs: u64) -> Self {
         Self {
             attempts: VecDeque::new(),
+            limit,
+            window_secs,
         }
     }
 
     /// 尝试消费一次配额。返回 true 表示允许，false 表示限流。
     pub fn try_acquire(&mut self) -> bool {
         let now = std::time::Instant::now();
-        let cutoff = now - std::time::Duration::from_secs(REGISTER_RATE_WINDOW_SECS);
+        let cutoff = now - std::time::Duration::from_secs(self.window_secs);
         while self.attempts.front().map_or(false, |t| *t < cutoff) {
             self.attempts.pop_front();
         }
-        if self.attempts.len() >= REGISTER_RATE_LIMIT {
+        if self.attempts.len() >= self.limit {
             return false;
         }
         self.attempts.push_back(now);
@@ -57,6 +67,57 @@ impl RateLimiter {
 
 /// 共享速率限制器类型。
 pub type SharedRateLimiter = Arc<Mutex<RateLimiter>>;
+
+/// per-client（per-sid）代理速率限制参数。
+const PROXY_RATE_LIMIT: usize = 60;
+const PROXY_RATE_WINDOW_SECS: u64 = 60;
+
+/// per-client 滑动窗口速率限制器：sid → RateLimiter。
+///
+/// 每个 sid 独立计算配额，互不影响。
+pub struct ClientRateLimiter {
+    limiters: HashMap<String, RateLimiter>,
+}
+
+impl ClientRateLimiter {
+    pub fn new() -> Self {
+        Self {
+            limiters: HashMap::new(),
+        }
+    }
+
+    /// 尝试消费一次配额。返回 true 表示允许，false 表示限流。
+    pub fn try_acquire(&mut self, sid: &str) -> bool {
+        self.limiters
+            .entry(sid.to_string())
+            .or_insert_with(|| RateLimiter::with_params(PROXY_RATE_LIMIT, PROXY_RATE_WINDOW_SECS))
+            .try_acquire()
+    }
+}
+
+pub type SharedClientRateLimiter = Arc<Mutex<ClientRateLimiter>>;
+
+/// per-IP 注册速率限制器：IP → RateLimiter。
+pub struct IpRateLimiter {
+    limiters: HashMap<String, RateLimiter>,
+}
+
+impl IpRateLimiter {
+    pub fn new() -> Self {
+        Self {
+            limiters: HashMap::new(),
+        }
+    }
+
+    pub fn try_acquire(&mut self, ip: &str) -> bool {
+        self.limiters
+            .entry(ip.to_string())
+            .or_insert_with(|| RateLimiter::new())
+            .try_acquire()
+    }
+}
+
+pub type SharedIpRateLimiter = Arc<Mutex<IpRateLimiter>>;
 
 #[derive(Deserialize)]
 pub struct RegisterRequest {
@@ -88,14 +149,17 @@ pub struct RegisterResponse {
 
 /// 处理注册请求：签发 mac + client 令牌对。
 ///
-/// 流程：速率限制 → 验证 setup_token → 生成 sid → 签发两个 token → 持久化 → 返回。
+/// 流程：速率限制（per-IP） → 验证 setup_token → 设备数检查 →
+/// 生成 sid → 签发两个 token → 持久化 → 返回。
 /// 持久化失败时回滚内存条目。
 pub async fn handle_register(
     State(state): State<std::sync::Arc<AppState>>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     Json(body): Json<RegisterRequest>,
 ) -> Response {
-    // 速率限制检查
-    if !state.register_limiter.lock().await.try_acquire() {
+    // per-IP 速率限制检查
+    let client_ip = addr.ip().to_string();
+    if !state.register_limiter.lock().await.try_acquire(&client_ip) {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(serde_json::json!({"error": "rate_limited"})),
@@ -110,6 +174,21 @@ pub async fn handle_register(
             Json(serde_json::json!({"error": "invalid setup_token"})),
         )
             .into_response();
+    }
+
+    // 设备数量上限检查
+    {
+        let tokens = state.registered_tokens.lock().await;
+        if tokens.len() >= MAX_REGISTERED_DEVICES {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "device_limit_reached",
+                    "max_devices": MAX_REGISTERED_DEVICES,
+                })),
+            )
+                .into_response();
+        }
     }
 
     let sid = uuid::Uuid::now_v7().to_string();
@@ -255,8 +334,14 @@ mod tests {
             setup_token: "test-setup-token".to_string(),
             registered_tokens: Mutex::new(HashMap::new()),
             registered_tokens_path: test_tokens_path(),
-            register_limiter: Arc::new(Mutex::new(RateLimiter::new())),
+            register_limiter: Arc::new(Mutex::new(IpRateLimiter::new())),
+            client_limiter: Arc::new(Mutex::new(ClientRateLimiter::new())),
+            jti_cache: Mutex::new(HashMap::new()),
         })
+    }
+
+    fn test_connect_info() -> axum::extract::ConnectInfo<std::net::SocketAddr> {
+        axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 12345)))
     }
 
     fn test_tokens_path() -> PathBuf {
@@ -292,7 +377,7 @@ mod tests {
             ttl_days: 30,
         };
 
-        let resp = handle_register(State(state.clone()), Json(req)).await;
+        let resp = handle_register(State(state.clone()), test_connect_info(), Json(req)).await;
         let body = extract_json(resp).await;
         assert_eq!(body["_status"].as_u64().unwrap(), 200);
 
@@ -335,7 +420,7 @@ mod tests {
             ttl_days: 30,
         };
 
-        let resp = handle_register(State(state), Json(req)).await;
+        let resp = handle_register(State(state), test_connect_info(), Json(req)).await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
@@ -349,7 +434,7 @@ mod tests {
             label: "test".to_string(),
             ttl_days: 30,
         };
-        let reg_resp = handle_register(State(state.clone()), Json(reg_req)).await;
+        let reg_resp = handle_register(State(state.clone()), test_connect_info(), Json(reg_req)).await;
         let body = extract_json(reg_resp).await;
         let sid = body["sid"].as_str().unwrap().to_string();
 
