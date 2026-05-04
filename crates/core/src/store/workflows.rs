@@ -14,6 +14,7 @@ pub struct WorkflowRow {
     pub name: String,
     pub description: String,
     pub status: String,
+    pub advance_mode: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -36,6 +37,18 @@ pub struct WorkflowStepRow {
     pub finished_at: Option<String>,
 }
 
+/// 工作流推进信号行 — daemon stop hook 写入，bridge 消费。
+#[derive(Debug, Clone)]
+pub struct WorkflowAdvanceSignalRow {
+    pub id: i64,
+    pub workflow_id: String,
+    pub step_id: Option<String>,
+    pub agent: String,
+    pub signal_type: String,
+    pub consumed_at: Option<String>,
+    pub created_at: String,
+}
+
 impl AuditStore {
     pub(crate) fn map_workflow_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkflowRow> {
         Ok(WorkflowRow {
@@ -43,8 +56,9 @@ impl AuditStore {
             name: row.get(1)?,
             description: row.get(2)?,
             status: row.get(3)?,
-            created_at: row.get(4)?,
-            updated_at: row.get(5)?,
+            advance_mode: row.get(4)?,
+            created_at: row.get(5)?,
+            updated_at: row.get(6)?,
         })
     }
 
@@ -76,8 +90,8 @@ impl AuditStore {
     ) -> CheckpointResult<()> {
         self.conn
             .execute(
-                "INSERT INTO workflows (id, name, description, status, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, 'draft', ?4, ?4)",
+                "INSERT INTO workflows (id, name, description, status, advance_mode, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, 'draft', 'auto', ?4, ?4)",
                 rusqlite::params![id, name, description, created_at],
             )
             .map_err(CheckpointError::InsertWorkflow)?;
@@ -88,7 +102,7 @@ impl AuditStore {
     pub fn get_workflow(&self, id: &str) -> CheckpointResult<Option<WorkflowRow>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id, name, description, status, created_at, updated_at FROM workflows WHERE id = ?1")
+            .prepare("SELECT id, name, description, status, advance_mode, created_at, updated_at FROM workflows WHERE id = ?1")
             .map_err(CheckpointError::QueryWorkflow)?;
         let mut rows = stmt
             .query_map(rusqlite::params![id], Self::map_workflow_row)
@@ -104,7 +118,7 @@ impl AuditStore {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, name, description, status, created_at, updated_at
+                "SELECT id, name, description, status, advance_mode, created_at, updated_at
                  FROM workflows ORDER BY created_at DESC LIMIT ?1 OFFSET ?2",
             )
             .map_err(CheckpointError::QueryWorkflow)?;
@@ -151,6 +165,23 @@ impl AuditStore {
         Ok(rows)
     }
 
+    /// 更新工作流 advance_mode。允许任何状态。
+    pub fn update_workflow_advance_mode(
+        &self,
+        id: &str,
+        advance_mode: &str,
+        updated_at: &str,
+    ) -> CheckpointResult<usize> {
+        let rows = self
+            .conn
+            .execute(
+                "UPDATE workflows SET advance_mode = ?2, updated_at = ?3 WHERE id = ?1",
+                rusqlite::params![id, advance_mode, updated_at],
+            )
+            .map_err(CheckpointError::UpdateWorkflow)?;
+        Ok(rows)
+    }
+
     /// 删除工作流及其所有步骤。只允许 draft/failed/cancelled 状态。
     /// 返回：Ok(true) = 已删除，Ok(false) = not found，Err = running。
     pub fn delete_workflow(&self, id: &str) -> CheckpointResult<bool> {
@@ -173,6 +204,76 @@ impl AuditStore {
             }
             None => Ok(false),
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Workflow Advance Signals
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// 写入 workflow 推进信号（daemon stop hook → bridge）。
+    pub fn insert_workflow_advance_signal(
+        &self,
+        workflow_id: &str,
+        step_id: Option<&str>,
+        agent: &str,
+        signal_type: &str,
+        created_at: &str,
+    ) -> CheckpointResult<i64> {
+        self.conn
+            .execute(
+                "INSERT INTO workflow_advance_signals (workflow_id, step_id, agent, signal_type, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                rusqlite::params![workflow_id, step_id, agent, signal_type, created_at],
+            )
+            .map_err(CheckpointError::InsertWorkflow)?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// 轮询未消费的推进信号（bridge 后台线程调用）。
+    pub fn poll_workflow_advance_signals(
+        &self,
+        workflow_id: &str,
+    ) -> CheckpointResult<Vec<WorkflowAdvanceSignalRow>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, workflow_id, step_id, agent, signal_type, consumed_at, created_at
+                 FROM workflow_advance_signals
+                 WHERE workflow_id = ?1 AND consumed_at IS NULL
+                 ORDER BY id ASC",
+            )
+            .map_err(CheckpointError::QueryWorkflow)?;
+        let rows = stmt
+            .query_map(rusqlite::params![workflow_id], |row| {
+                Ok(WorkflowAdvanceSignalRow {
+                    id: row.get(0)?,
+                    workflow_id: row.get(1)?,
+                    step_id: row.get(2)?,
+                    agent: row.get(3)?,
+                    signal_type: row.get(4)?,
+                    consumed_at: row.get(5)?,
+                    created_at: row.get(6)?,
+                })
+            })
+            .map_err(CheckpointError::QueryWorkflow)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(CheckpointError::QueryWorkflow)
+    }
+
+    /// 消费推进信号（bridge resume 后标记已处理）。
+    pub fn consume_workflow_advance_signal(
+        &self,
+        id: i64,
+        consumed_at: &str,
+    ) -> CheckpointResult<usize> {
+        let rows = self
+            .conn
+            .execute(
+                "UPDATE workflow_advance_signals SET consumed_at = ?2 WHERE id = ?1",
+                rusqlite::params![id, consumed_at],
+            )
+            .map_err(CheckpointError::UpdateWorkflow)?;
+        Ok(rows)
     }
 
     /// 重新排序工作流步骤。step_orders 是 (step_id, new_order) 的列表。
@@ -598,5 +699,40 @@ mod tests {
         let next = store.get_next_pending_step("wf1").unwrap().unwrap();
         assert_eq!(next.id, "s0");
         assert_eq!(next.step_order, 0);
+    }
+
+    #[test]
+    fn workflow_advance_mode_roundtrip() {
+        let store = AuditStore::open_in_memory().unwrap();
+        let now = "2026-05-04T10:00:00Z";
+        store.insert_workflow("wf-adv", "Test", "", now).unwrap();
+
+        let wf = store.get_workflow("wf-adv").unwrap().unwrap();
+        assert_eq!(wf.advance_mode, "auto");
+
+        store.update_workflow_advance_mode("wf-adv", "manual", now).unwrap();
+        let wf = store.get_workflow("wf-adv").unwrap().unwrap();
+        assert_eq!(wf.advance_mode, "manual");
+    }
+
+    #[test]
+    fn workflow_advance_signal_poll_and_consume() {
+        let store = AuditStore::open_in_memory().unwrap();
+        let now = "2026-05-04T10:00:00Z";
+        store.insert_workflow("wf-sig", "Test", "", now).unwrap();
+
+        // Insert signals
+        store.insert_workflow_advance_signal("wf-sig", Some("s1"), "kimi_code", "stop", now).unwrap();
+        store.insert_workflow_advance_signal("wf-sig", None, "claude_code", "next_step", now).unwrap();
+
+        // Poll unconsumed
+        let signals = store.poll_workflow_advance_signals("wf-sig").unwrap();
+        assert_eq!(signals.len(), 2);
+
+        // Consume first
+        store.consume_workflow_advance_signal(signals[0].id, now).unwrap();
+        let signals = store.poll_workflow_advance_signals("wf-sig").unwrap();
+        assert_eq!(signals.len(), 1);
+        assert_eq!(signals[0].agent, "claude_code");
     }
 }

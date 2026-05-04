@@ -102,7 +102,8 @@ impl AuditStore {
                     created_at TEXT NOT NULL,
                     started_at TEXT,
                     finished_at TEXT,
-                    exit_code INTEGER
+                    exit_code INTEGER,
+                    workflow_id TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
                 CREATE TABLE IF NOT EXISTS job_logs (
@@ -187,6 +188,8 @@ impl AuditStore {
                     description TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL DEFAULT 'draft'
                         CHECK(status IN ('draft','running','succeeded','failed','cancelled')),
+                    advance_mode TEXT NOT NULL DEFAULT 'auto'
+                        CHECK(advance_mode IN ('auto','manual')),
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -226,6 +229,8 @@ impl AuditStore {
         self.migrate_v13_stop_marker()?;
         self.migrate_v14_sys_user()?;
         self.migrate_v15_workflows()?;
+        self.migrate_v16_job_workflow_id()?;
+        self.migrate_v17_workflow_advance_mode()?;
         self.conn
             .execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_conv_agent ON events(conversation_id, agent)",
@@ -513,6 +518,8 @@ impl AuditStore {
                     description TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL DEFAULT 'draft'
                         CHECK(status IN ('draft','running','succeeded','failed','cancelled')),
+                    advance_mode TEXT NOT NULL DEFAULT 'auto'
+                        CHECK(advance_mode IN ('auto','manual')),
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -536,6 +543,55 @@ impl AuditStore {
                 );
                 CREATE INDEX IF NOT EXISTS idx_workflow_steps_workflow ON workflow_steps(workflow_id, step_order);
                 CREATE INDEX IF NOT EXISTS idx_workflow_steps_job ON workflow_steps(job_id);",
+            )
+            .map_err(CheckpointError::MigrateConversationSchema)?;
+        Ok(())
+    }
+
+    /// v16: jobs 表新增 workflow_id 列，支持工作流审计追踪。
+    fn migrate_v16_job_workflow_id(&self) -> CheckpointResult<()> {
+        if !self.column_exists("jobs", "workflow_id")? {
+            self.conn
+                .execute("ALTER TABLE jobs ADD COLUMN workflow_id TEXT", [])
+                .map_err(CheckpointError::MigrateConversationSchema)?;
+        }
+        Ok(())
+    }
+
+    /// v17: workflows 表新增 advance_mode + workflow_advance_signals 信号表。
+    ///
+    /// advance_mode 控制 workflow 推进方式：
+    /// - auto: 全自动串行执行（现有行为）
+    /// - manual: 每步完成后暂停，等 stop hook 信号或 API 调用后推进
+    ///
+    /// workflow_advance_signals 是 daemon → bridge 的异步信号通道：
+    /// - daemon 在 stop hook 匹配到 manual workflow job 时写入
+    /// - bridge 后台轮询消费，收到后 resume workflow
+    fn migrate_v17_workflow_advance_mode(&self) -> CheckpointResult<()> {
+        // 1. workflows 表新增 advance_mode
+        if !self.column_exists("workflows", "advance_mode")? {
+            self.conn
+                .execute(
+                    "ALTER TABLE workflows ADD COLUMN advance_mode TEXT DEFAULT 'auto' CHECK(advance_mode IN ('auto','manual'))",
+                    [],
+                )
+                .map_err(CheckpointError::MigrateConversationSchema)?;
+        }
+        // 2. 信号表
+        self.conn
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS workflow_advance_signals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    workflow_id TEXT NOT NULL,
+                    step_id TEXT,
+                    agent TEXT NOT NULL,
+                    signal_type TEXT NOT NULL DEFAULT 'stop'
+                        CHECK(signal_type IN ('stop','next_step')),
+                    consumed_at TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (workflow_id) REFERENCES workflows(id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_advance_signals_unconsumed ON workflow_advance_signals(workflow_id, consumed_at);",
             )
             .map_err(CheckpointError::MigrateConversationSchema)?;
         Ok(())
@@ -961,7 +1017,7 @@ mod tests {
         let now = "2026-04-25T10:00:00Z";
 
         store
-            .insert_job("j1", "git_status", "{}", now, None, None, None, None)
+            .insert_job("j1", "git_status", "{}", now, None, None, None, None, None)
             .expect("insert job");
         let rows = store
             .update_job_started("j1", "2026-04-25T10:00:01Z")
@@ -971,7 +1027,7 @@ mod tests {
         assert_eq!(job.status, "running");
 
         store
-            .insert_job("j2", "git_status", "{}", now, None, None, None, None)
+            .insert_job("j2", "git_status", "{}", now, None, None, None, None, None)
             .expect("insert job j2");
         store.cancel_job("j2").expect("cancel j2");
         let rows = store
@@ -1048,7 +1104,7 @@ mod tests {
         assert_eq!(store.count_active_jobs().unwrap(), 0);
 
         store
-            .insert_job("j1", "git_status", "{}", now, None, None, None, None)
+            .insert_job("j1", "git_status", "{}", now, None, None, None, None, None)
             .unwrap();
         assert_eq!(store.count_active_jobs().unwrap(), 1);
 
@@ -1061,16 +1117,16 @@ mod tests {
         assert_eq!(store.count_active_jobs().unwrap(), 0);
 
         store
-            .insert_job("j2", "git_status", "{}", now, None, None, None, None)
+            .insert_job("j2", "git_status", "{}", now, None, None, None, None, None)
             .unwrap();
         store.cancel_job("j2").unwrap();
         assert_eq!(store.count_active_jobs().unwrap(), 0);
 
         store
-            .insert_job("j3", "git_status", "{}", now, None, None, None, None)
+            .insert_job("j3", "git_status", "{}", now, None, None, None, None, None)
             .unwrap();
         store
-            .insert_job("j4", "git_status", "{}", now, None, None, None, None)
+            .insert_job("j4", "git_status", "{}", now, None, None, None, None, None)
             .unwrap();
         assert_eq!(store.count_active_jobs().unwrap(), 2);
     }
@@ -1080,7 +1136,7 @@ mod tests {
         let store = AuditStore::open_in_memory().expect("open in-memory db");
         let now = "2026-04-25T10:00:00Z";
         store
-            .insert_job("j1", "git_status", "{}", now, None, None, None, None)
+            .insert_job("j1", "git_status", "{}", now, None, None, None, None, None)
             .unwrap();
 
         let rows = store
@@ -1117,10 +1173,10 @@ mod tests {
         let store = AuditStore::open_in_memory().expect("open in-memory db");
         let now = "2026-04-25T10:00:00Z";
         store
-            .insert_job("queued", "git_status", "{}", now, None, None, None, None)
+            .insert_job("queued", "git_status", "{}", now, None, None, None, None, None)
             .unwrap();
         store
-            .insert_job("running", "git_status", "{}", now, None, None, None, None)
+            .insert_job("running", "git_status", "{}", now, None, None, None, None, None)
             .unwrap();
         store
             .update_job_started_supervised(
@@ -1739,6 +1795,7 @@ mod tests {
                 Some("/tmp/proj"),
                 Some("sess-stop-1"),
                 Some("test prompt"),
+                None,
             )
             .expect("insert job");
         store
@@ -1788,7 +1845,7 @@ mod tests {
                 "failed",
                 now2,
                 None,
-                Some("stop hook received"),
+                Some("[aspect-stop] hook received"),
                 Some("stop_requested"),
             )
             .expect("converge job");
@@ -1798,7 +1855,7 @@ mod tests {
             .insert_job_log(
                 "j-stop",
                 "system",
-                "[stop hook received \u{2014} converging job]",
+                "[aspect-stop] hook received — converging job",
                 0,
                 now2,
             )
@@ -1808,11 +1865,11 @@ mod tests {
         let job = store.get_job("j-stop").unwrap().unwrap();
         assert_eq!(job.status, "failed");
         assert_eq!(job.completed_reason.as_deref(), Some("stop_requested"));
-        assert_eq!(job.failure_reason.as_deref(), Some("stop hook received"));
+        assert_eq!(job.failure_reason.as_deref(), Some("[aspect-stop] hook received"));
         assert_eq!(job.stop_requested_at.as_deref(), Some(stop_time));
 
         let logs = store.get_job_logs("j-stop").unwrap();
-        assert!(logs.iter().any(|l| l.chunk.contains("stop hook received")));
+        assert!(logs.iter().any(|l| l.chunk.contains("[aspect-stop] hook received")));
 
         // 7. No longer in stopped list (terminal state)
         let stopped = store.get_jobs_with_stop_requested().unwrap();
@@ -1834,6 +1891,7 @@ mod tests {
                 Some("/tmp/proj"),
                 Some("shared-sess"),
                 Some("test"),
+                None,
             )
             .expect("insert job");
         store
@@ -1869,6 +1927,7 @@ mod tests {
                 Some("/tmp/proj"),
                 None, // no conversation_id
                 Some("test"),
+                None,
             )
             .expect("insert job");
         store

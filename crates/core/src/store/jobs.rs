@@ -30,6 +30,7 @@ pub struct JobRow {
     pub last_log_at: Option<String>,
     pub completed_reason: Option<String>,
     pub stop_requested_at: Option<String>,
+    pub workflow_id: Option<String>,
 }
 
 /// 任务日志行 — stdout/stderr/system 流的逐块记录。
@@ -67,6 +68,7 @@ impl AuditStore {
             last_log_at: row.get(18)?,
             completed_reason: row.get(19)?,
             stop_requested_at: row.get(20)?,
+            workflow_id: row.get(21)?,
         })
     }
 
@@ -91,11 +93,12 @@ impl AuditStore {
         project_path: Option<&str>,
         conversation_id: Option<&str>,
         prompt: Option<&str>,
+        workflow_id: Option<&str>,
     ) -> CheckpointResult<()> {
         self.conn
             .execute(
-                "INSERT INTO jobs (id, kind, input, status, created_at, provider, project_path, conversation_id, prompt) VALUES (?1, ?2, ?3, 'queued', ?4, ?5, ?6, ?7, ?8)",
-                rusqlite::params![id, kind, input, created_at, provider, project_path, conversation_id, prompt],
+                "INSERT INTO jobs (id, kind, input, status, created_at, provider, project_path, conversation_id, prompt, workflow_id) VALUES (?1, ?2, ?3, 'queued', ?4, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![id, kind, input, created_at, provider, project_path, conversation_id, prompt, workflow_id],
             )
             .map_err(CheckpointError::SubmitJob)?;
         Ok(())
@@ -348,7 +351,7 @@ impl AuditStore {
                 "SELECT id, kind, input, status, created_at, started_at, finished_at, exit_code,
                     provider, project_path, conversation_id, prompt, pid, process_group_id,
                     runner_id, heartbeat_at, timeout_secs, failure_reason, last_log_at,
-                    completed_reason, stop_requested_at
+                    completed_reason, stop_requested_at, workflow_id
              FROM jobs
              WHERE status IN ('queued', 'running', 'observing') AND (runner_id IS NULL OR runner_id != ?1)
              ORDER BY created_at ASC",
@@ -391,7 +394,7 @@ impl AuditStore {
                 "SELECT id, kind, input, status, created_at, started_at, finished_at, exit_code,
                         provider, project_path, conversation_id, prompt, pid, process_group_id,
                         runner_id, heartbeat_at, timeout_secs, failure_reason, last_log_at,
-                        completed_reason, stop_requested_at
+                        completed_reason, stop_requested_at, workflow_id
                  FROM jobs WHERE id = ?1",
                 rusqlite::params![id],
                 Self::map_job_row,
@@ -413,7 +416,7 @@ impl AuditStore {
             "SELECT id, kind, input, status, created_at, started_at, finished_at, exit_code,
                     provider, project_path, conversation_id, prompt, pid, process_group_id,
                     runner_id, heartbeat_at, timeout_secs, failure_reason, last_log_at,
-                    completed_reason, stop_requested_at FROM jobs",
+                    completed_reason, stop_requested_at, workflow_id FROM jobs",
         );
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         if let Some(s) = status_filter {
@@ -543,7 +546,7 @@ impl AuditStore {
                 "SELECT id, kind, input, status, created_at, started_at, finished_at, exit_code,
                         provider, project_path, conversation_id, prompt, pid, process_group_id,
                         runner_id, heartbeat_at, timeout_secs, failure_reason, last_log_at,
-                        completed_reason, stop_requested_at
+                        completed_reason, stop_requested_at, workflow_id
                  FROM jobs
                  WHERE status IN ('running', 'observing')
                    AND provider = ?1 AND conversation_id = ?2
@@ -574,7 +577,7 @@ impl AuditStore {
                 "SELECT id, kind, input, status, created_at, started_at, finished_at, exit_code,
                         provider, project_path, conversation_id, prompt, pid, process_group_id,
                         runner_id, heartbeat_at, timeout_secs, failure_reason, last_log_at,
-                        completed_reason, stop_requested_at
+                        completed_reason, stop_requested_at, workflow_id
                  FROM jobs
                  WHERE status IN ('running', 'observing')
                    AND provider = ?1 AND project_path = ?2
@@ -599,7 +602,7 @@ impl AuditStore {
                 "SELECT id, kind, input, status, created_at, started_at, finished_at, exit_code,
                         provider, project_path, conversation_id, prompt, pid, process_group_id,
                         runner_id, heartbeat_at, timeout_secs, failure_reason, last_log_at,
-                        completed_reason, stop_requested_at
+                        completed_reason, stop_requested_at, workflow_id
                  FROM jobs
                  WHERE status IN ('running', 'observing')
                    AND stop_requested_at IS NOT NULL",
