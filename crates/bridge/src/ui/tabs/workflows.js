@@ -6,6 +6,8 @@ const WFS = {
   pollTimer: null,
   createOpen: false,
   editing: false,
+  tplName: '',
+  tplDesc: '',
   steps: [{ provider: 'claude_code', project_path: '', prompt: '', context_strategy: 'none' }]
 };
 
@@ -97,13 +99,13 @@ function renderWfCreateForm() {
   el.innerHTML =
     '<div style="display:flex;flex-direction:column;gap:10px">' +
       '<div style="display:flex;gap:8px;align-items:center">' +
-        '<input class="input" id="wf-name" placeholder="工作流名称" style="flex:1">' +
+        '<input class="input" id="wf-name" placeholder="工作流名称" style="flex:1" value="' + esc(WFS.tplName) + '">' +
         '<select class="select" id="wf-template" onchange="applyWfTemplate()" style="width:140px">' +
           '<option value="">从模板创建...</option>' +
           WF_TEMPLATES.map(t => '<option value="' + t.id + '">' + esc(t.name) + '</option>').join('') +
         '</select>' +
       '</div>' +
-      '<input class="input" id="wf-desc" placeholder="描述（可选）">' +
+      '<input class="input" id="wf-desc" placeholder="描述（可选）" value="' + esc(WFS.tplDesc) + '">' +
       '<div style="font-size:.8rem;color:var(--dim)">步骤（按顺序执行）</div>' +
       '<div id="wf-steps-list">' + stepsHtml + '</div>' +
       '<div style="display:flex;gap:8px">' +
@@ -118,7 +120,11 @@ function toggleWfCreate() {
   WFS.createOpen = !WFS.createOpen;
   const el = document.getElementById('wf-create-form');
   if (el) el.classList.toggle('hidden', !WFS.createOpen);
-  if (WFS.createOpen) renderWfCreateForm();
+  if (WFS.createOpen) {
+    WFS.tplName = '';
+    WFS.tplDesc = '';
+    renderWfCreateForm();
+  }
 }
 
 function applyWfTemplate() {
@@ -127,13 +133,10 @@ function applyWfTemplate() {
   const tpl = WF_TEMPLATES.find(t => t.id === sel.value);
   if (!tpl) return;
 
-  document.getElementById('wf-name').value = tpl.name;
-  document.getElementById('wf-desc').value = tpl.description;
+  WFS.tplName = tpl.name;
+  WFS.tplDesc = tpl.description;
   WFS.steps = tpl.steps.map(s => ({...s}));
   renderWfCreateForm();
-  // 恢复 template selector 值（renderWfCreateForm 会重建 DOM）
-  const newSel = document.getElementById('wf-template');
-  if (newSel) newSel.value = tpl.id;
 }
 
 function addWfStep() {
@@ -181,27 +184,31 @@ function submitCreateWf() {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: name.trim(), description: desc.trim(), steps: WFS.steps })
-  }).then(r => r.json()).then(data => {
+  }).then(data => {
+    if (data.error) { toast(data.error); return; }
     if (data.id) {
       toast('工作流已创建');
       WFS.createOpen = false;
       const el = document.getElementById('wf-create-form');
       if (el) el.classList.add('hidden');
+      WFS.tplName = '';
+      WFS.tplDesc = '';
       WFS.steps = [{ provider: 'claude_code', project_path: '', prompt: '', context_strategy: 'none' }];
       loadWorkflowList();
       selectWorkflow(data.id);
     } else {
-      toast(data.error || '创建失败');
+      toast('创建失败');
     }
-  }).catch(e => toast('请求失败: ' + e));
+  });
 }
 
 /* ---------- List ---------- */
 function loadWorkflowList() {
-  api('/workflows?limit=50').then(r => r.json()).then(data => {
+  return api('/workflows?limit=50').then(data => {
+    if (data.error) return;
     WFS.list = data.workflows || [];
     renderWfList();
-  }).catch(() => {});
+  });
 }
 
 function renderWfList() {
@@ -217,7 +224,7 @@ function renderWfList() {
     const selected = WFS.selected && WFS.selected.id === wf.id;
     const badge = wfStatusBadge(wf.status);
     const counts = wf.step_counts || {};
-    return '<div class="wf-card' + (selected ? ' wf-card-selected' : '') + '" onclick="selectWorkflow(\'' + wf.id + '\')" style="padding:12px 16px;border-bottom:1px solid var(--border);cursor:pointer' + (selected ? ';background:var(--surface)' : '') + '">' +
+    return '<div class="wf-card' + (selected ? ' wf-card-selected' : '') + '" onclick="selectWorkflow(\'' + jsStr(wf.id) + '\')" style="padding:12px 16px;border-bottom:1px solid var(--border);cursor:pointer' + (selected ? ';background:var(--surface)' : '') + '">' +
       '<div style="display:flex;align-items:center;gap:8px">' +
         '<span style="font-weight:500;font-size:.9rem">' + esc(wf.name) + '</span>' +
         badge +
@@ -234,11 +241,13 @@ function renderWfList() {
 
 /* ---------- Detail ---------- */
 function selectWorkflow(id) {
-  api('/workflows/' + id).then(r => r.json()).then(data => {
+  api('/workflows/' + id).then(data => {
+    if (data.error) { toast(data.error); return; }
     WFS.selected = data;
+    WFS.editing = false;
     renderWfList();
     renderWfDetail();
-  }).catch(() => {});
+  });
 }
 
 function renderWfDetail() {
@@ -263,7 +272,7 @@ function renderWfDetail() {
         '<input class="input" id="wf-edit-name" value="' + esc(wf.name) + '" style="margin-bottom:8px">' +
         '<input class="input" id="wf-edit-desc" value="' + esc(wf.description) + '" placeholder="描述（可选）" style="margin-bottom:8px">' +
         '<div style="display:flex;gap:8px">' +
-          '<button class="btn btn-primary btn-sm" onclick="saveWfEdit(\'' + wf.id + '\')">保存</button>' +
+          '<button class="btn btn-primary btn-sm" onclick="saveWfEdit(\'' + jsStr(wf.id) + '\')">保存</button>' +
           '<button class="btn btn-sm" onclick="cancelWfEdit()">取消</button>' +
         '</div>' +
       '</div>';
@@ -272,7 +281,7 @@ function renderWfDetail() {
   // 步骤列表（可拖拽）
   let stepsHtml = (wf.steps || []).map((s, i) => {
     const stepBadge = stepStatusBadge(s.status);
-    const draggable = canEdit ? ' draggable="true" data-step-id="' + s.id + '" data-step-idx="' + i + '"' : '';
+    const draggable = canEdit ? ' draggable="true" data-step-id="' + esc(s.id) + '" data-step-idx="' + i + '"' : '';
     return '<div class="wf-step-item" style="display:flex;gap:12px;padding:10px 0' + (i < wf.steps.length - 1 ? ';border-bottom:1px solid var(--border)' : '') + '"' + draggable + '>' +
       '<div style="min-width:32px;display:flex;flex-direction:column;align-items:center">' +
         (canEdit ? '<div style="cursor:grab;color:var(--dim);font-size:.7rem;margin-bottom:2px">⋮⋮</div>' : '') +
@@ -297,11 +306,11 @@ function renderWfDetail() {
       '<h3 style="margin:0;font-size:1.1rem">' + esc(wf.name) + '</h3>' +
       badge +
       '<div style="margin-left:auto;display:flex;gap:8px">' +
-        (canRun ? '<button class="btn btn-primary btn-sm" onclick="runWorkflow(\'' + wf.id + '\')">执行</button>' : '') +
-        (canRetry ? '<button class="btn btn-primary btn-sm" onclick="runWorkflow(\'' + wf.id + '\')">重试</button>' : '') +
-        (canCancel ? '<button class="btn btn-sm" style="color:var(--red)" onclick="cancelWorkflow(\'' + wf.id + '\')">取消</button>' : '') +
+        (canRun ? '<button class="btn btn-primary btn-sm" onclick="runWorkflow(\'' + jsStr(wf.id) + '\')">执行</button>' : '') +
+        (canRetry ? '<button class="btn btn-primary btn-sm" onclick="runWorkflow(\'' + jsStr(wf.id) + '\')">重试</button>' : '') +
+        (canCancel ? '<button class="btn btn-sm" style="color:var(--red)" onclick="cancelWorkflow(\'' + jsStr(wf.id) + '\')">取消</button>' : '') +
         (canEdit ? '<button class="btn btn-sm" onclick="startWfEdit()">编辑</button>' : '') +
-        (canEdit ? '<button class="btn btn-sm" style="color:var(--red)" onclick="deleteWorkflow(\'' + wf.id + '\')">删除</button>' : '') +
+        (canEdit ? '<button class="btn btn-sm" style="color:var(--red)" onclick="deleteWorkflow(\'' + jsStr(wf.id) + '\')">删除</button>' : '') +
       '</div>' +
     '</div>' +
     editHtml +
@@ -316,33 +325,29 @@ function renderWfDetail() {
 
 /* ---------- Actions ---------- */
 function runWorkflow(id) {
-  api('/workflows/' + id + '/run', { method: 'POST' })
-    .then(r => r.json())
-    .then(data => {
-      if (data.status === 'running') {
-        toast('工作流已开始执行');
-        selectWorkflow(id);
-        startWfPolling();
-      } else {
-        toast(data.error || '执行失败');
-      }
-    })
-    .catch(e => toast('请求失败: ' + e));
+  api('/workflows/' + id + '/run', { method: 'POST' }).then(data => {
+    if (data.error) { toast(data.error); return; }
+    if (data.status === 'running') {
+      toast('工作流已开始执行');
+      selectWorkflow(id);
+      startWfPolling();
+    } else {
+      toast(data.error || '执行失败');
+    }
+  });
 }
 
 function cancelWorkflow(id) {
-  api('/workflows/' + id + '/cancel', { method: 'POST' })
-    .then(r => r.json())
-    .then(data => {
-      if (data.status === 'cancelled') {
-        toast('工作流已取消');
-        selectWorkflow(id);
-        stopWfPolling();
-      } else {
-        toast(data.error || '取消失败');
-      }
-    })
-    .catch(e => toast('请求失败: ' + e));
+  api('/workflows/' + id + '/cancel', { method: 'POST' }).then(data => {
+    if (data.error) { toast(data.error); return; }
+    if (data.status === 'cancelled') {
+      toast('工作流已取消');
+      selectWorkflow(id);
+      stopWfPolling();
+    } else {
+      toast(data.error || '取消失败');
+    }
+  });
 }
 
 /* ---------- Edit/Delete ---------- */
@@ -365,7 +370,8 @@ function saveWfEdit(id) {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: name.trim(), description: desc.trim() })
-  }).then(r => r.json()).then(data => {
+  }).then(data => {
+    if (data.error) { toast(data.error); return; }
     if (data.status === 'updated') {
       toast('已保存');
       WFS.editing = false;
@@ -374,26 +380,25 @@ function saveWfEdit(id) {
     } else {
       toast(data.error || '保存失败');
     }
-  }).catch(e => toast('请求失败: ' + e));
+  });
 }
 
 function deleteWorkflow(id) {
   if (!confirm('确定删除此工作流？此操作不可恢复。')) return;
 
-  api('/workflows/' + id, { method: 'DELETE' })
-    .then(r => r.json())
-    .then(data => {
-      if (data.status === 'deleted') {
-        toast('已删除');
-        WFS.selected = null;
-        loadWorkflowList();
-        const detail = document.getElementById('wf-detail-panel');
-        if (detail) detail.innerHTML = '<div style="padding:24px;text-align:center;color:var(--dim)">选择一个工作流</div>';
-      } else {
-        toast(data.error || '删除失败');
-      }
-    })
-    .catch(e => toast('请求失败: ' + e));
+  api('/workflows/' + id, { method: 'DELETE' }).then(data => {
+    if (data.error) { toast(data.error); return; }
+    if (data.status === 'deleted') {
+      toast('已删除');
+      WFS.selected = null;
+      WFS.editing = false;
+      loadWorkflowList();
+      const detail = document.getElementById('wf-detail-panel');
+      if (detail) detail.innerHTML = '<div style="padding:24px;text-align:center;color:var(--dim)">选择一个工作流</div>';
+    } else {
+      toast(data.error || '删除失败');
+    }
+  });
 }
 
 /* ---------- Step Drag & Drop ---------- */
@@ -448,14 +453,15 @@ function initStepDragDrop() {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ steps: stepOrders })
-      }).then(r => r.json()).then(data => {
+      }).then(data => {
+        if (data.error) { toast(data.error); return; }
         if (data.status === 'reordered') {
           toast('步骤已重排');
           selectWorkflow(WFS.selected.id);
         } else {
           toast(data.error || '重排失败');
         }
-      }).catch(e => toast('请求失败: ' + e));
+      });
     });
   });
 }
@@ -494,9 +500,9 @@ function stepColor(status) {
 /* ---------- Tab Entry ---------- */
 function loadWorkflows() {
   ensureWorkflowLayout();
-  loadWorkflowList();
-  // 如果有 running 的 workflow，启动 polling
-  if (WFS.list.some(wf => wf.status === 'running')) {
-    startWfPolling();
-  }
+  loadWorkflowList().then(() => {
+    if (WFS.list.some(wf => wf.status === 'running')) {
+      startWfPolling();
+    }
+  });
 }
