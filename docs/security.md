@@ -12,13 +12,26 @@
 - Evaluates every tool call against the rule engine.
 - Stores all events and decisions in a local SQLite database.
 - Never sends data to external services.
+- Unix socket and database files are restricted to owner-only (0600), parent directory to 0700.
+- IPC messages are capped at 1 MiB to prevent memory exhaustion.
+- Override requests are validated against existing event IDs to prevent phantom record injection.
+
+### Hook (`agent-aspect-hook`)
+
+- Invoked by AI agents as a pre-tool-use hook.
+- Delegates all decisions to the daemon via Unix socket IPC.
+- **Fail-closed**: if the daemon is unreachable and the mode is Guard or Paranoid, tool calls are denied. Only Observer/Autonomous mode allows passthrough when the daemon is down.
 
 ### Bridge (`agent-aspect-bridge`)
 
 - Token-protected HTTP server on `127.0.0.1:7676` by default.
-- All endpoints require Bearer token auth except `GET /health`.
+- All endpoints require Bearer token auth except `GET /health` and `GET /beat`.
 - Token is generated locally via `getrandom` (cryptographically secure) and stored at `~/.agent-aspect/bridge.token`.
 - CORS is disabled. No cross-origin requests are accepted.
+- POST bodies are capped at 10 MiB; oversized requests return 413.
+- Login is rate-limited: 5 consecutive failures trigger a 60-second lockout.
+- SSE connections are capped at 20 concurrent clients.
+- Request threads are capped at 100 concurrent (503 when exceeded).
 
 ### Relay (`agent-aspect-relay`)
 
@@ -69,6 +82,16 @@ Device IDs record which browser or hook made a decision. They are for audit attr
 | Local hook | Fixed device ID from hook config. |
 | Fallback | Hash of `remote_addr + User-Agent`. |
 
+## Bridge Threat Model
+
+| Threat | Mitigation |
+|--------|------------|
+| Brute force login | 5 failures → 60s lockout. Login only from loopback. |
+| Resource exhaustion (body) | POST body capped at 10 MiB. |
+| Resource exhaustion (SSE) | Max 20 concurrent SSE connections. |
+| Resource exhaustion (threads) | Max 100 concurrent request threads. |
+| Process spawn injection | Uses argv (not shell) for subprocess launch. No command injection possible. |
+
 ## Relay Threat Model
 
 | Threat | Mitigation |
@@ -80,6 +103,17 @@ Device IDs record which browser or hook made a decision. They are for audit attr
 | Brute force token | 64-hex-char setup_token (256 bits). Not feasibly brute-forceable. |
 | Connection hanging / DoS | WS connections must register within 10s. Heartbeat detects dead connections (3 missed pongs = disconnect). |
 | Proxy abuse / excessive requests | Per-client rate limit (60/min per sid). Per-session pending request cap (100). |
+
+## Local Threat Model
+
+| Threat | Mitigation |
+|--------|------------|
+| Unix socket access by other users | Socket file permissions 0600, parent directory 0700. |
+| Daemon crash disables guardrails | Hook fails closed in Guard/Paranoid mode. |
+| IPC message bomb | Messages capped at 1 MiB; oversized messages drop the connection. |
+| Phantom override injection | Override requests validated against existing event IDs. |
+| `$HOME` tampering | Falls back to `getpwuid(getuid())` when `$HOME` is unset. |
+| Config file readable by others | `config.toml` written with 0600 permissions. |
 
 ## Permission Inheritance
 
