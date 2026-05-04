@@ -50,15 +50,15 @@ function ensureWorkflowLayout() {
   if (!view || document.getElementById('wf-layout')) return;
 
   view.innerHTML =
-    '<div id="wf-layout" style="display:flex;flex-direction:column;height:100%;overflow:hidden">' +
-      '<div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border);flex-shrink:0">' +
-        '<h2 style="margin:0;font-size:1.1rem">工作流</h2>' +
+    '<div id="wf-layout" class="wf-layout">' +
+      '<div class="wf-header">' +
+        '<h2>工作流</h2>' +
         '<button class="btn btn-primary btn-sm" onclick="toggleWfCreate()">新建工作流</button>' +
       '</div>' +
-      '<div id="wf-create-form" class="hidden" style="padding:16px;border-bottom:1px solid var(--border);background:var(--surface)"></div>' +
-      '<div style="display:flex;flex:1;overflow:hidden">' +
-        '<div id="wf-list-panel" style="width:320px;border-right:1px solid var(--border);overflow-y:auto;flex-shrink:0"></div>' +
-        '<div id="wf-detail-panel" style="flex:1;overflow-y:auto;padding:16px"></div>' +
+      '<div id="wf-create-form" class="wf-create-form hidden"></div>' +
+      '<div class="wf-body">' +
+        '<div id="wf-list-panel" class="wf-list-panel"></div>' +
+        '<div id="wf-detail-panel" class="wf-detail-panel"></div>' +
       '</div>' +
     '</div>';
 
@@ -73,11 +73,11 @@ function renderWfCreateForm() {
   let stepsHtml = '';
   WFS.steps.forEach((s, i) => {
     stepsHtml +=
-      '<div style="display:flex;gap:8px;align-items:start;margin-bottom:8px;padding:8px;background:var(--bg);border-radius:6px">' +
-        '<span style="min-width:24px;text-align:center;color:var(--dim);font-size:.8rem;padding-top:6px">' + (i + 1) + '</span>' +
-        '<div style="flex:1;display:flex;flex-direction:column;gap:6px">' +
-          '<div style="display:flex;gap:6px">' +
-            '<select class="select wf-step-provider" data-idx="' + i + '" style="flex:1">' +
+      '<div class="wf-step-editor">' +
+        '<span class="wf-step-editor-num">' + (i + 1) + '</span>' +
+        '<div class="wf-step-editor-body">' +
+          '<div class="wf-step-editor-row">' +
+            '<select class="select wf-step-provider" data-idx="' + i + '">' +
               '<option value="claude_code"' + (s.provider === 'claude_code' ? ' selected' : '') + '>Claude Code</option>' +
               '<option value="kimi_code"' + (s.provider === 'kimi_code' ? ' selected' : '') + '>Kimi Code</option>' +
               '<option value="codex_cli"' + (s.provider === 'codex_cli' ? ' selected' : '') + '>Codex CLI</option>' +
@@ -180,10 +180,11 @@ function submitCreateWf() {
     if (!s.prompt.trim()) { toast('步骤提示词不能为空'); return; }
   }
 
+  const advanceMode = (document.getElementById('wf-advance-mode') || {}).value || 'auto';
   api('/workflows', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: name.trim(), description: desc.trim(), steps: WFS.steps })
+    body: JSON.stringify({ name: name.trim(), description: desc.trim(), advance_mode: advanceMode, steps: WFS.steps })
   }).then(data => {
     if (data.error) { toast(data.error); return; }
     if (data.id) {
@@ -216,7 +217,7 @@ function renderWfList() {
   if (!el) return;
 
   if (WFS.list.length === 0) {
-    el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--dim)">暂无工作流</div>';
+    el.innerHTML = '<div class="wf-empty">暂无工作流</div>';
     return;
   }
 
@@ -224,13 +225,10 @@ function renderWfList() {
     const selected = WFS.selected && WFS.selected.id === wf.id;
     const badge = wfStatusBadge(wf.status);
     const counts = wf.step_counts || {};
-    return '<div class="wf-card' + (selected ? ' wf-card-selected' : '') + '" onclick="selectWorkflow(\'' + jsStr(wf.id) + '\')" style="padding:12px 16px;border-bottom:1px solid var(--border);cursor:pointer' + (selected ? ';background:var(--surface)' : '') + '">' +
-      '<div style="display:flex;align-items:center;gap:8px">' +
-        '<span style="font-weight:500;font-size:.9rem">' + esc(wf.name) + '</span>' +
-        badge +
-      '</div>' +
-      (wf.description ? '<div style="font-size:.78rem;color:var(--dim);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + esc(wf.description) + '</div>' : '') +
-      '<div style="font-size:.72rem;color:var(--dim);margin-top:4px">' +
+    return '<div class="wf-card' + (selected ? ' wf-card-selected' : '') + '" onclick="selectWorkflow(\'' + jsStr(wf.id) + '\')">' +
+      '<div class="wf-card-title">' + esc(wf.name) + badge + '</div>' +
+      (wf.description ? '<div class="wf-card-desc">' + esc(wf.description) + '</div>' : '') +
+      '<div class="wf-card-meta">' +
         (counts.total || 0) + ' 步 · ' +
         '<span style="color:var(--green)">' + (counts.succeeded || 0) + ' 完成</span>' +
         (counts.failed ? ' · <span style="color:var(--red)">' + counts.failed + ' 失败</span>' : '') +
@@ -253,16 +251,17 @@ function selectWorkflow(id) {
 function renderWfDetail() {
   const el = document.getElementById('wf-detail-panel');
   if (!el || !WFS.selected) {
-    if (el) el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--dim)">选择一个工作流</div>';
+    if (el) el.innerHTML = '<div class="wf-empty">选择一个工作流</div>';
     return;
   }
 
   const wf = WFS.selected;
   const badge = wfStatusBadge(wf.status);
   const canRun = wf.status === 'draft';
-  const canRetry = wf.status === 'failed' || wf.status === 'cancelled';
+  const canRetry = wf.status === 'failed' || wf.status === 'cancelled' || wf.status === 'paused';
   const canCancel = wf.status === 'running';
-  const canEdit = wf.status !== 'running';
+  const canEdit = wf.status !== 'running' && wf.status !== 'paused';
+  const canAdvance = wf.status === 'paused' && wf.advance_mode === 'manual';
 
   // 编辑表单（toggle）
   let editHtml = '';
@@ -271,6 +270,10 @@ function renderWfDetail() {
       '<div style="margin-bottom:16px;padding:12px;background:var(--surface);border-radius:8px">' +
         '<input class="input" id="wf-edit-name" value="' + esc(wf.name) + '" style="margin-bottom:8px">' +
         '<input class="input" id="wf-edit-desc" value="' + esc(wf.description) + '" placeholder="描述（可选）" style="margin-bottom:8px">' +
+        '<select class="select" id="wf-edit-advance-mode" style="margin-bottom:8px;width:160px">' +
+          '<option value="auto"' + (wf.advance_mode === 'auto' ? ' selected' : '') + '>自动推进</option>' +
+          '<option value="manual"' + (wf.advance_mode === 'manual' ? ' selected' : '') + '>手动推进</option>' +
+        '</select>' +
         '<div style="display:flex;gap:8px">' +
           '<button class="btn btn-primary btn-sm" onclick="saveWfEdit(\'' + jsStr(wf.id) + '\')">保存</button>' +
           '<button class="btn btn-sm" onclick="cancelWfEdit()">取消</button>' +
@@ -281,34 +284,38 @@ function renderWfDetail() {
   // 步骤列表（可拖拽）
   let stepsHtml = (wf.steps || []).map((s, i) => {
     const stepBadge = stepStatusBadge(s.status);
+    const numClass = 'wf-step-number ' + (s.status || 'pending');
+    const connClass = 'wf-step-connector ' + (s.status === 'succeeded' ? 'done' : '');
     const draggable = canEdit ? ' draggable="true" data-step-id="' + esc(s.id) + '" data-step-idx="' + i + '"' : '';
-    return '<div class="wf-step-item" style="display:flex;gap:12px;padding:10px 0' + (i < wf.steps.length - 1 ? ';border-bottom:1px solid var(--border)' : '') + '"' + draggable + '>' +
-      '<div style="min-width:32px;display:flex;flex-direction:column;align-items:center">' +
+    const providerLabel = AGENTS[s.provider] || s.provider || 'unknown';
+    return '<div class="wf-step-item"' + draggable + '>' +
+      '<div class="wf-step-timeline">' +
         (canEdit ? '<div style="cursor:grab;color:var(--dim);font-size:.7rem;margin-bottom:2px">⋮⋮</div>' : '') +
-        '<div style="width:24px;height:24px;border-radius:50%;background:' + stepColor(s.status) + ';display:flex;align-items:center;justify-content:center;font-size:.7rem;color:#fff">' + (i + 1) + '</div>' +
-        (i < wf.steps.length - 1 ? '<div style="width:2px;flex:1;background:var(--border);margin-top:4px"></div>' : '') +
+        '<div class="' + numClass + '" style="background:' + stepColor(s.status) + '">' + (i + 1) + '</div>' +
+        (i < wf.steps.length - 1 ? '<div class="' + connClass + '"></div>' : '') +
       '</div>' +
-      '<div style="flex:1">' +
-        '<div style="display:flex;align-items:center;gap:8px">' +
-          '<span style="font-size:.85rem;font-weight:500">' + esc(s.provider || 'unknown') + '</span>' +
+      '<div class="wf-step-content">' +
+        '<div class="wf-step-head">' +
+          '<span class="wf-step-provider">' + esc(providerLabel) + '</span>' +
           stepBadge +
-          (s.context_strategy !== 'none' ? '<span style="font-size:.68rem;color:var(--dim);background:var(--surface);padding:1px 6px;border-radius:4px">' + esc(s.context_strategy) + '</span>' : '') +
+          (s.context_strategy !== 'none' ? '<span class="wf-step-ctx">' + esc(s.context_strategy) + '</span>' : '') +
         '</div>' +
-        (s.project_path ? '<div style="font-size:.75rem;color:var(--dim);margin-top:2px">' + esc(s.project_path) + '</div>' : '') +
-        '<div style="font-size:.8rem;margin-top:4px;white-space:pre-wrap;color:var(--text)">' + esc(s.prompt) + '</div>' +
-        (s.job_id ? '<div style="font-size:.72rem;color:var(--dim);margin-top:4px">Job: ' + esc(s.job_id.substring(0, 8)) + '... <button class="btn btn-sm" style="font-size:.68rem;padding:1px 6px" onclick="toggleStepLogs(\'' + jsStr(s.id) + '\',\'' + jsStr(wf.id) + '\')">日志</button></div>' : '') +
+        (s.project_path ? '<div class="wf-step-path">' + esc(s.project_path) + '</div>' : '') +
+        '<div class="wf-step-prompt">' + esc(s.prompt) + '</div>' +
+        (s.job_id ? '<div class="wf-step-job">Job: ' + esc(s.job_id.substring(0, 8)) + '… <button class="btn btn-sm" style="font-size:.68rem;padding:1px 6px" onclick="toggleStepLogs(\'' + jsStr(s.id) + '\',\'' + jsStr(wf.id) + '\')">日志</button></div>' : '') +
         '<div id="step-logs-' + esc(s.id) + '"></div>' +
       '</div>' +
     '</div>';
   }).join('');
 
   el.innerHTML =
-    '<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">' +
-      '<h3 style="margin:0;font-size:1.1rem">' + esc(wf.name) + '</h3>' +
+    '<div class="wf-detail-header">' +
+      '<h3>' + esc(wf.name) + '</h3>' +
       badge +
-      '<div style="margin-left:auto;display:flex;gap:8px">' +
+      '<div class="wf-detail-actions">' +
         (canRun ? '<button class="btn btn-primary btn-sm" onclick="runWorkflow(\'' + jsStr(wf.id) + '\')">执行</button>' : '') +
         (canRetry ? '<button class="btn btn-primary btn-sm" onclick="runWorkflow(\'' + jsStr(wf.id) + '\')">重试</button>' : '') +
+        (canAdvance ? '<button class="btn btn-primary btn-sm" onclick="advanceWorkflow(\'' + jsStr(wf.id) + '\')">下一步</button>' : '') +
         (canCancel ? '<button class="btn btn-sm" style="color:var(--red)" onclick="cancelWorkflow(\'' + jsStr(wf.id) + '\')">取消</button>' : '') +
         (canEdit ? '<button class="btn btn-sm" onclick="startWfEdit()">编辑</button>' : '') +
         (canEdit ? '<button class="btn btn-sm" style="color:var(--red)" onclick="deleteWorkflow(\'' + jsStr(wf.id) + '\')">删除</button>' : '') +
@@ -316,9 +323,9 @@ function renderWfDetail() {
     '</div>' +
     editHtml +
     (wf.description && !WFS.editing ? '<p style="color:var(--dim);margin:0 0 16px;font-size:.85rem">' + esc(wf.description) + '</p>' : '') +
-    '<div style="font-size:.78rem;color:var(--dim);margin-bottom:16px">创建于 ' + formatTime(wf.created_at) + '</div>' +
+    '<div style="font-size:.78rem;color:var(--dim);margin-bottom:16px">创建于 ' + formatTime(wf.created_at) + ' · 模式: ' + (wf.advance_mode === 'manual' ? '<span style="color:var(--yellow)">手动推进</span>' : '自动推进') + '</div>' +
     '<div style="font-size:.85rem;font-weight:500;margin-bottom:12px">步骤</div>' +
-    '<div id="wf-steps-list">' + stepsHtml + '</div>';
+    '<div class="wf-step-list">' + stepsHtml + '</div>';
 
   // 绑定拖拽事件
   if (canEdit) initStepDragDrop();
@@ -334,6 +341,18 @@ function runWorkflow(id) {
       startWfPolling();
     } else {
       toast(data.error || '执行失败');
+    }
+  });
+}
+
+function advanceWorkflow(id) {
+  api('/workflows/' + id + '/next-step', { method: 'POST' }).then(data => {
+    if (data.error) { toast(data.error); return; }
+    if (data.status === 'signal_queued') {
+      toast('已发送推进信号');
+      selectWorkflow(id);
+    } else {
+      toast(data.error || '推进失败');
     }
   });
 }
@@ -365,12 +384,16 @@ function cancelWfEdit() {
 function saveWfEdit(id) {
   const name = (document.getElementById('wf-edit-name') || {}).value || '';
   const desc = (document.getElementById('wf-edit-desc') || {}).value || '';
+  const advanceMode = (document.getElementById('wf-edit-advance-mode') || {}).value || '';
   if (!name.trim()) { toast('名称不能为空'); return; }
+
+  const payload = { name: name.trim(), description: desc.trim() };
+  if (advanceMode) payload.advance_mode = advanceMode;
 
   api('/workflows/' + id, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: name.trim(), description: desc.trim() })
+    body: JSON.stringify(payload)
   }).then(data => {
     if (data.error) { toast(data.error); return; }
     if (data.status === 'updated') {
@@ -395,7 +418,7 @@ function deleteWorkflow(id) {
       WFS.editing = false;
       loadWorkflowList();
       const detail = document.getElementById('wf-detail-panel');
-      if (detail) detail.innerHTML = '<div style="padding:24px;text-align:center;color:var(--dim)">选择一个工作流</div>';
+      if (detail) detail.innerHTML = '<div class="wf-empty">选择一个工作流</div>';
     } else {
       toast(data.error || '删除失败');
     }
@@ -442,12 +465,10 @@ function initStepDragDrop() {
       let toIdx = parseInt(item.dataset.stepIdx);
       if (fromIdx < 0 || isNaN(toIdx) || fromIdx === toIdx) return;
 
-      // 重排数组（向下拖拽时，移除后目标索引需减 1）
       const [moved] = steps.splice(fromIdx, 1);
       if (fromIdx < toIdx) toIdx--;
       steps.splice(toIdx, 0, moved);
 
-      // 构造 reorder 请求
       const stepOrders = steps.map((s, i) => ({ id: s.id, step_order: i }));
 
       api('/workflows/' + WFS.selected.id + '/steps/reorder', {
@@ -496,7 +517,7 @@ function toggleStepLogs(stepId, workflowId) {
   }
 
   WFS_LOGS[stepId] = { open: true, loading: true }
-  el.innerHTML = '<div style="padding:8px;color:var(--dim);font-size:.75rem">加载日志...</div>'
+  el.innerHTML = '<div class="wf-empty" style="padding:12px;font-size:.75rem">加载日志...</div>'
 
   api('/workflows/' + workflowId + '/steps/' + stepId + '/logs?limit=500').then(data => {
     WFS_LOGS[stepId].loading = false
@@ -506,7 +527,7 @@ function toggleStepLogs(stepId, workflowId) {
     }
     const logs = data.logs || []
     if (logs.length === 0) {
-      el.innerHTML = '<div style="padding:8px;color:var(--dim);font-size:.75rem">暂无日志</div>'
+      el.innerHTML = '<div class="wf-empty" style="padding:12px;font-size:.75rem">暂无日志</div>'
       return
     }
     const lines = logs.map(l => {
@@ -514,10 +535,7 @@ function toggleStepLogs(stepId, workflowId) {
       const cls = (l.stream === 'stderr' || l.stream === 'STDERR') ? 'style="color:var(--red)"' : ''
       return '<div ' + cls + '>' + ts + esc(l.chunk) + '</div>'
     }).join('')
-    el.innerHTML =
-      '<div style="max-height:300px;overflow-y:auto;padding:8px;background:var(--bg);border-radius:6px;margin:4px 0;font-family:monospace;font-size:.72rem;line-height:1.5">' +
-        lines +
-      '</div>' +
+    el.innerHTML = '<div class="wf-step-logs">' + lines + '</div>' +
       (data.total > logs.length ? '<div style="padding:4px;font-size:.68rem;color:var(--dim)">显示 ' + logs.length + '/' + data.total + '</div>' : '')
   })
 }
@@ -526,13 +544,13 @@ function toggleStepLogs(stepId, workflowId) {
 function wfStatusBadge(status) {
   const colors = { draft: 'var(--dim)', running: 'var(--blue)', succeeded: 'var(--green)', failed: 'var(--red)', cancelled: 'var(--yellow)' };
   const labels = { draft: '草稿', running: '运行中', succeeded: '完成', failed: '失败', cancelled: '已取消' };
-  return '<span style="font-size:.68rem;padding:2px 8px;border-radius:10px;background:' + (colors[status] || 'var(--dim)') + ';color:#fff">' + (labels[status] || esc(status)) + '</span>';
+  return '<span class="wf-step-badge" style="background:' + (colors[status] || 'var(--dim)') + ';color:#fff">' + (labels[status] || esc(status)) + '</span>';
 }
 
 function stepStatusBadge(status) {
   const colors = { pending: 'var(--dim)', running: 'var(--blue)', succeeded: 'var(--green)', failed: 'var(--red)', cancelled: 'var(--yellow)', skipped: 'var(--dim)' };
   const labels = { pending: '待执行', running: '执行中', succeeded: '完成', failed: '失败', cancelled: '已取消', skipped: '跳过' };
-  return '<span style="font-size:.65rem;padding:1px 6px;border-radius:8px;background:' + (colors[status] || 'var(--dim)') + ';color:#fff">' + (labels[status] || esc(status)) + '</span>';
+  return '<span class="wf-step-badge" style="background:' + (colors[status] || 'var(--dim)') + ';color:#fff">' + (labels[status] || esc(status)) + '</span>';
 }
 
 function stepColor(status) {

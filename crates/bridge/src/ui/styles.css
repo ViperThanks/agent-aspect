@@ -172,8 +172,7 @@ html,body{height:100%;font-family:var(--font-system);background:var(--bg);color:
 .conv-resize-handle{width:5px;cursor:col-resize;background:transparent;flex-shrink:0;transition:background .15s;position:relative}
 .conv-resize-handle:hover,.conv-resize-handle.active{background:var(--accent)}
 .conv-list{flex:1;overflow-y:auto;padding:12px}
-.conv-filter-bar{display:flex;gap:6px;padding:10px 12px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0;overflow-x:auto;scrollbar-width:none}
-.conv-filter-bar::-webkit-scrollbar{display:none}
+.conv-filter-bar{display:flex;gap:6px;padding:10px 12px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0;flex-wrap:wrap}
 .filter-chip{padding:6px 12px;border-radius:6px;font-size:.76rem;font-weight:600;cursor:pointer;background:var(--surface2);border:1px solid var(--border);color:var(--dim);white-space:nowrap;transition:all .15s}
 .filter-chip:hover{border-color:var(--border-hover);color:var(--text)}
 .filter-chip.active{background:var(--accent-bg);border-color:var(--accent);color:#fff}
@@ -580,6 +579,67 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .conv-run-dialog-ctx{display:flex;gap:6px;flex-wrap:wrap}
 .conv-run-dialog-actions{display:flex;justify-content:flex-end}
 .conv-run-status{font-size:.8rem;min-height:1.2em}
+
+/* ===== Workflows ===== */
+.wf-layout{display:flex;flex-direction:column;height:100%;overflow:hidden}
+.wf-header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--surface)}
+.wf-header h2{margin:0;font-size:1.05rem;font-weight:700}
+.wf-body{display:flex;flex:1;overflow:hidden}
+.wf-list-panel{width:300px;flex-shrink:0;border-right:1px solid var(--border);overflow-y:auto;background:var(--surface)}
+.wf-detail-panel{flex:1;overflow-y:auto;padding:16px}
+
+.wf-card{padding:14px 16px;border-bottom:1px solid var(--border);cursor:pointer;transition:all .15s;background:var(--surface)}
+.wf-card:hover{background:var(--surface2)}
+.wf-card-selected{background:var(--accent-bg)!important;border-left:3px solid var(--accent)}
+.wf-card-title{font-weight:600;font-size:.88rem;color:var(--text);margin-bottom:4px}
+.wf-card-desc{font-size:.76rem;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:6px}
+.wf-card-meta{font-size:.7rem;color:var(--dim);display:flex;gap:8px;align-items:center}
+
+.wf-detail-header{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+.wf-detail-header h3{margin:0;font-size:1.1rem;font-weight:700;flex:1}
+.wf-detail-actions{display:flex;gap:8px;margin-left:auto}
+
+.wf-step-list{display:flex;flex-direction:column;gap:0}
+.wf-step-item{display:flex;gap:12px;padding:14px 0;position:relative}
+.wf-step-item:not(:last-child){border-bottom:1px solid var(--border)}
+.wf-step-timeline{min-width:36px;display:flex;flex-direction:column;align-items:center;padding-top:2px}
+.wf-step-number{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.72rem;font-weight:700;color:#fff;background:var(--surface3);flex-shrink:0}
+.wf-step-number.done{background:var(--green)}
+.wf-step-number.running{background:var(--accent);animation:pulse-bg 1.5s ease-in-out infinite}
+.wf-step-number.failed{background:var(--red)}
+.wf-step-connector{width:2px;flex:1;background:var(--border);margin-top:6px;min-height:12px}
+.wf-step-connector.done{background:var(--green-bg)}
+.wf-step-content{flex:1;min-width:0}
+.wf-step-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+.wf-step-provider{font-size:.78rem;font-weight:600;color:var(--text);padding:2px 8px;border-radius:4px;background:var(--surface2)}
+.wf-step-badge{font-size:.65rem;padding:2px 8px;border-radius:4px;font-weight:600}
+.wf-step-ctx{font-size:.65rem;padding:1px 6px;border-radius:4px;background:var(--surface3);color:var(--dim)}
+.wf-step-prompt{font-size:.82rem;line-height:1.55;color:var(--text);margin:6px 0;white-space:pre-wrap;word-break:break-word}
+.wf-step-path{font-size:.74rem;color:var(--dim);margin-bottom:4px}
+.wf-step-job{font-size:.72rem;color:var(--dim);margin-top:6px;display:flex;gap:8px;align-items:center}
+.wf-step-logs{margin-top:8px;padding:10px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);font-family:var(--font-mono);font-size:.76rem;line-height:1.6;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow-y:auto}
+
+.wf-create-form{padding:16px;border-bottom:1px solid var(--border);background:var(--surface)}
+.wf-step-editor{display:flex;gap:8px;align-items:start;margin-bottom:10px;padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm)}
+.wf-step-editor-num{min-width:28px;text-align:center;color:var(--dim);font-size:.8rem;padding-top:8px;font-weight:600}
+.wf-step-editor-body{flex:1;display:flex;flex-direction:column;gap:8px}
+.wf-step-editor-row{display:flex;gap:8px}
+.wf-step-editor-row .select,.wf-step-editor-row .input{flex:1}
+
+.wf-empty{padding:40px 20px;text-align:center;color:var(--dim)}
+
+@keyframes pulse-bg{0%,100%{opacity:1}50%{opacity:.6}}
+
+/* ===== Chat Thinking ===== */
+.chat-thinking{margin:4px 0 8px;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--surface)}
+.chat-thinking-bar{display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;font-size:.78rem;color:var(--dim);background:var(--surface2);user-select:none;transition:background .15s}
+.chat-thinking-bar:hover{background:var(--surface3);color:var(--text)}
+.chat-thinking-label{font-weight:600;display:flex;align-items:center;gap:6px}
+.chat-thinking-chevron{font-size:.65rem;transition:transform .2s ease;margin-left:auto}
+.chat-thinking.open .chat-thinking-chevron{transform:rotate(90deg)}
+.chat-thinking-body{display:none;padding:10px 12px;font-size:.8rem;line-height:1.6;color:var(--dim);background:var(--bg);border-top:1px solid var(--border);white-space:pre-wrap;word-break:break-word;max-height:400px;overflow-y:auto;font-family:var(--font-mono)}
+.chat-thinking.open .chat-thinking-body{display:block}
+.chat-thinking-summary{font-size:.75rem;color:var(--dim);margin-left:4px}
 
 /* ===== Light Theme ===== */
 [data-theme="light"] html,

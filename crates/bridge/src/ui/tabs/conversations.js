@@ -673,12 +673,13 @@ function buildActivityHtml(messages) {
   var html = '';
   var runIdx = 0;
   var cardIdx = 0;
+  var msgIdx = 0;
 
   for (var g = 0; g < groups.length; g++) {
     var group = groups[g];
 
     if (group.userSeg) {
-      html += buildChatMessageHtml(group.userSeg.message, tsState);
+      html += buildChatMessageHtml(group.userSeg.message, tsState, msgIdx++);
     }
 
     // 按 assistant 边界切分 tool runs
@@ -692,7 +693,7 @@ function buildActivityHtml(messages) {
       for (; segCursor < group.segments.length; segCursor++) {
         var seg = group.segments[segCursor];
         if (seg.type === 'assistant') {
-          html += buildChatMessageHtml(seg.message, tsState);
+          html += buildChatMessageHtml(seg.message, tsState, msgIdx++);
         } else if (seg.type === 'user') {
           continue;
         } else {
@@ -723,7 +724,7 @@ function buildActivityHtml(messages) {
       for (; segCursor < group.segments.length; segCursor++) {
         var after = group.segments[segCursor];
         if (after.type === 'assistant') {
-          html += buildChatMessageHtml(after.message, tsState);
+          html += buildChatMessageHtml(after.message, tsState, msgIdx++);
         } else if (after.type === 'user') {
           continue;
         } else {
@@ -736,7 +737,7 @@ function buildActivityHtml(messages) {
     for (; segCursor < group.segments.length; segCursor++) {
       var tail = group.segments[segCursor];
       if (tail.type === 'assistant') {
-        html += buildChatMessageHtml(tail.message, tsState);
+        html += buildChatMessageHtml(tail.message, tsState, msgIdx++);
       }
     }
   }
@@ -744,7 +745,43 @@ function buildActivityHtml(messages) {
   return html;
 }
 
-function buildChatMessageHtml(m, tsState) {
+function extractThinking(text) {
+  if (!text) return { thinking: '', content: text || '' };
+  // Support <thinking>...</thinking> tags
+  const match = text.match(/<thinking>([\s\S]*?)<\/thinking>/);
+  if (match) {
+    const thinking = match[1].trim();
+    const content = text.replace(match[0], '').trim();
+    return { thinking, content };
+  }
+  return { thinking: '', content: text };
+}
+
+function buildThinkingHtml(thinking, idx) {
+  if (!thinking) return '';
+  // Generate a brief summary: count lines or just show "已思考"
+  const lines = thinking.split('\n').filter(l => l.trim()).length;
+  const summary = lines > 1 ? '已思考 ' + lines + ' 步' : '思考过程';
+  const id = 'thinking-' + idx;
+  return '<div class="chat-thinking" id="' + id + '">' +
+    '<div class="chat-thinking-bar" onclick="toggleThinking(\'' + id + '\')">' +
+      '<span class="chat-thinking-label">' +
+        '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 16a1 1 0 1 1 1-1 1 1 0 0 1-1 1zm1-5h-2V7h2z"/></svg>' +
+        'Thinking' +
+      '</span>' +
+      '<span class="chat-thinking-summary">' + esc(summary) + '</span>' +
+      '<span class="chat-thinking-chevron">&#x25B8;</span>' +
+    '</div>' +
+    '<div class="chat-thinking-body">' + esc(thinking) + '</div>' +
+  '</div>';
+}
+
+function toggleThinking(id) {
+  const el = document.getElementById(id);
+  if (el) el.classList.toggle('open');
+}
+
+function buildChatMessageHtml(m, tsState, idx) {
   const tsRaw = m.timestamp ? formatMsgTime(m.timestamp) : '';
   const showTs = tsRaw && (!tsState || tsRaw !== tsState.last);
   if (showTs && tsState) tsState.last = tsRaw;
@@ -753,7 +790,9 @@ function buildChatMessageHtml(m, tsState) {
     return '<div class="chat-row chat-row-user"><div class="chat-msg chat-user"><div class="chat-role-row"><span class="chat-role">你</span>' + ts + '</div><div class="chat-text md-render">' + renderMd(m.text) + '</div></div></div>';
   }
   if (m.role === 'assistant') {
-    return '<div class="chat-row chat-row-assistant"><div class="chat-msg chat-assistant"><div class="chat-role-row"><span class="chat-role">助手</span>' + ts + '</div><div class="chat-text md-render">' + renderMd(m.text) + '</div></div></div>';
+    const t = m.thinking ? { thinking: m.thinking, content: m.text || '' } : extractThinking(m.text);
+    const thinkingHtml = buildThinkingHtml(t.thinking, idx || Math.random().toString(36).slice(2, 8));
+    return '<div class="chat-row chat-row-assistant"><div class="chat-msg chat-assistant"><div class="chat-role-row"><span class="chat-role">助手</span>' + ts + '</div>' + thinkingHtml + '<div class="chat-text md-render">' + renderMd(t.content) + '</div></div></div>';
   }
   if (m.role === 'tool_summary') {
     const hasFull = m.tool_input_full && m.tool_input_full !== m.tool_input_preview;

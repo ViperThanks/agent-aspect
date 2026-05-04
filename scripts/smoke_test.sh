@@ -238,9 +238,9 @@ fi
 
 echo ""
 echo "=== test 11: override decision written to audit (ask → deny, rule_id=user_override) ==="
-OVERRIDE_COUNT=$(sqlite3 "$HOME_OVERRIDE/.agent-aspect/audit.db" "SELECT COUNT(*) FROM decisions WHERE rule_id = 'user_override';")
+OVERRIDE_COUNT=$(sqlite3 "$HOME_OVERRIDE/.agent-aspect/audit.db" "SELECT COUNT(*) FROM decisions WHERE rule_id = '[aspect-user-override]';")
 if [ "$OVERRIDE_COUNT" -ge 1 ]; then
-    OVERRIDE_NOTE=$(sqlite3 "$HOME_OVERRIDE/.agent-aspect/audit.db" "SELECT note FROM decisions WHERE rule_id = 'user_override' LIMIT 1;")
+    OVERRIDE_NOTE=$(sqlite3 "$HOME_OVERRIDE/.agent-aspect/audit.db" "SELECT note FROM decisions WHERE rule_id = '[aspect-user-override]' LIMIT 1;")
     echo "PASS: override found in audit (note: $OVERRIDE_NOTE)"
 else
     echo "FAIL: no override decision found in audit"
@@ -260,7 +260,7 @@ else
 fi
 
 # deny 保持不变不应产生新 override
-OVERRIDE_AFTER_DENY=$(sqlite3 "$HOME_OVERRIDE/.agent-aspect/audit.db" "SELECT COUNT(*) FROM decisions WHERE rule_id = 'user_override';")
+OVERRIDE_AFTER_DENY=$(sqlite3 "$HOME_OVERRIDE/.agent-aspect/audit.db" "SELECT COUNT(*) FROM decisions WHERE rule_id = '[aspect-user-override]';")
 if [ "$OVERRIDE_AFTER_DENY" -eq "$OVERRIDE_COUNT" ]; then
     echo "PASS: no extra override for upheld deny"
 else

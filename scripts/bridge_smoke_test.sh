@@ -757,6 +757,30 @@ else
 fi
 
 echo ""
+echo "=== test 40b: PUT /workflows/:id advance_mode → manual ==="
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
+    -H "$AUTH" \
+    -H "Content-Type: application/json" \
+    -d '{"advance_mode":"manual"}' \
+    "$API/workflows/$WF_ID")
+if [ "$HTTP_CODE" = "200" ]; then
+    echo "PASS"
+else
+    echo "FAIL: expected 200, got $HTTP_CODE"
+    FAILED=1
+fi
+
+echo ""
+echo "=== test 40c: GET /workflows/:id detail has advance_mode=manual ==="
+WF_DETAIL=$(curl -s -H "$AUTH" "$API/workflows/$WF_ID")
+if echo "$WF_DETAIL" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('advance_mode')=='manual'" 2>/dev/null; then
+    echo "PASS"
+else
+    echo "FAIL: advance_mode not manual: $WF_DETAIL"
+    FAILED=1
+fi
+
+echo ""
 echo "=== test 41: PUT /workflows/:id/steps/reorder ==="
 # 获取当前 steps
 STEPS_JSON=$(curl -s -H "$AUTH" "$API/workflows/$WF_ID")
@@ -771,6 +795,18 @@ if [ "$HTTP_CODE" = "200" ]; then
     echo "PASS"
 else
     echo "FAIL: expected 200, got $HTTP_CODE"
+    FAILED=1
+fi
+
+echo ""
+echo "=== test 41b: POST /workflows/:id/next-step on draft workflow → 400 ==="
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+    -H "$AUTH" \
+    "$API/workflows/$WF_ID/next-step")
+if [ "$HTTP_CODE" = "400" ]; then
+    echo "PASS"
+else
+    echo "FAIL: expected 400 for draft workflow, got $HTTP_CODE"
     FAILED=1
 fi
 
@@ -802,7 +838,7 @@ fi
 
 echo ""
 if [ "$FAILED" -eq 0 ]; then
-    echo "=== ALL 47 BRIDGE TESTS PASSED ==="
+    echo "=== ALL 49 BRIDGE TESTS PASSED ==="
 else
     echo "=== SOME BRIDGE TESTS FAILED ==="
     exit 1
