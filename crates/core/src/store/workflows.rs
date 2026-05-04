@@ -152,10 +152,13 @@ impl AuditStore {
     }
 
     /// 删除工作流及其所有步骤。只允许 draft/failed/cancelled 状态。
+    /// 返回：Ok(true) = 已删除，Ok(false) = not found，Err = running 或其他不可删除状态。
     pub fn delete_workflow(&self, id: &str) -> CheckpointResult<bool> {
         let wf = self.get_workflow(id)?;
         match wf {
-            Some(w) if w.status == "running" => Ok(false),
+            Some(w) if w.status == "running" => {
+                Err(CheckpointError::UpdateWorkflow(rusqlite::Error::StatementChangedRows(0)))
+            }
             Some(_) => {
                 self.conn.execute(
                     "DELETE FROM workflow_steps WHERE workflow_id = ?1",

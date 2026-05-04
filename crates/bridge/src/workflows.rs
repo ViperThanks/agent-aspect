@@ -591,8 +591,8 @@ pub fn handle_delete_workflow(
     let store = ctx.store.lock().unwrap();
     match store.delete_workflow(workflow_id) {
         Ok(true) => json_response(200, &serde_json::json!({"id": workflow_id, "status": "deleted"})),
-        Ok(false) => json_response(404, &serde_json::json!({"error": "workflow not found or running"})),
-        Err(e) => json_response(500, &serde_json::json!({"error": e.to_string()})),
+        Ok(false) => json_response(404, &serde_json::json!({"error": "workflow not found"})),
+        Err(_) => json_response(400, &serde_json::json!({"error": "cannot delete running workflow"})),
     }
 }
 
@@ -625,6 +625,13 @@ pub fn handle_put_workflow_steps_reorder(
         return json_response(400, &serde_json::json!({"error": "cannot reorder running workflow"}));
     }
 
+    // 获取现有步骤，验证 step ID 归属
+    let existing_steps = match store.get_workflow_steps(workflow_id) {
+        Ok(s) => s,
+        Err(e) => return json_response(500, &serde_json::json!({"error": e.to_string()})),
+    };
+    let existing_ids: std::collections::HashSet<&str> = existing_steps.iter().map(|s| s.id.as_str()).collect();
+
     // 解析 step_orders: [{"id": "...", "step_order": 0}, ...]
     let mut step_orders = Vec::new();
     for (i, s) in steps.iter().enumerate() {
@@ -632,6 +639,9 @@ pub fn handle_put_workflow_steps_reorder(
         let order = s.get("step_order").and_then(|v| v.as_i64()).unwrap_or(i as i64);
         if step_id.is_empty() {
             return json_response(400, &serde_json::json!({"error": format!("step {i} missing id")}));
+        }
+        if !existing_ids.contains(step_id) {
+            return json_response(400, &serde_json::json!({"error": format!("step {step_id} not found in workflow")}));
         }
         step_orders.push((step_id.to_string(), order));
     }

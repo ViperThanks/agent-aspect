@@ -230,7 +230,7 @@ function renderWfDetail() {
         '<div style="display:flex;align-items:center;gap:8px">' +
           '<span style="font-size:.85rem;font-weight:500">' + esc(s.provider || 'unknown') + '</span>' +
           stepBadge +
-          (s.context_strategy !== 'none' ? '<span style="font-size:.68rem;color:var(--dim);background:var(--surface);padding:1px 6px;border-radius:4px">' + s.context_strategy + '</span>' : '') +
+          (s.context_strategy !== 'none' ? '<span style="font-size:.68rem;color:var(--dim);background:var(--surface);padding:1px 6px;border-radius:4px">' + esc(s.context_strategy) + '</span>' : '') +
         '</div>' +
         (s.project_path ? '<div style="font-size:.75rem;color:var(--dim);margin-top:2px">' + esc(s.project_path) + '</div>' : '') +
         '<div style="font-size:.8rem;margin-top:4px;white-space:pre-wrap;color:var(--text)">' + esc(s.prompt) + '</div>' +
@@ -379,11 +379,12 @@ function initStepDragDrop() {
 
       const steps = WFS.selected.steps;
       const fromIdx = steps.findIndex(s => s.id === dragId);
-      const toIdx = parseInt(item.dataset.stepIdx);
-      if (fromIdx < 0 || isNaN(toIdx)) return;
+      let toIdx = parseInt(item.dataset.stepIdx);
+      if (fromIdx < 0 || isNaN(toIdx) || fromIdx === toIdx) return;
 
-      // 重排数组
+      // 重排数组（向下拖拽时，移除后目标索引需减 1）
       const [moved] = steps.splice(fromIdx, 1);
+      if (fromIdx < toIdx) toIdx--;
       steps.splice(toIdx, 0, moved);
 
       // 构造 reorder 请求
@@ -404,9 +405,6 @@ function initStepDragDrop() {
     });
   });
 }
-    })
-    .catch(e => toast('请求失败: ' + e));
-}
 
 /* ---------- Polling ---------- */
 function startWfPolling() {
@@ -425,13 +423,13 @@ function stopWfPolling() {
 function wfStatusBadge(status) {
   const colors = { draft: 'var(--dim)', running: 'var(--blue)', succeeded: 'var(--green)', failed: 'var(--red)', cancelled: 'var(--yellow)' };
   const labels = { draft: '草稿', running: '运行中', succeeded: '完成', failed: '失败', cancelled: '已取消' };
-  return '<span style="font-size:.68rem;padding:2px 8px;border-radius:10px;background:' + (colors[status] || 'var(--dim)') + ';color:#fff">' + (labels[status] || status) + '</span>';
+  return '<span style="font-size:.68rem;padding:2px 8px;border-radius:10px;background:' + (colors[status] || 'var(--dim)') + ';color:#fff">' + (labels[status] || esc(status)) + '</span>';
 }
 
 function stepStatusBadge(status) {
   const colors = { pending: 'var(--dim)', running: 'var(--blue)', succeeded: 'var(--green)', failed: 'var(--red)', cancelled: 'var(--yellow)', skipped: 'var(--dim)' };
   const labels = { pending: '待执行', running: '执行中', succeeded: '完成', failed: '失败', cancelled: '已取消', skipped: '跳过' };
-  return '<span style="font-size:.65rem;padding:1px 6px;border-radius:8px;background:' + (colors[status] || 'var(--dim)') + ';color:#fff">' + (labels[status] || status) + '</span>';
+  return '<span style="font-size:.65rem;padding:1px 6px;border-radius:8px;background:' + (colors[status] || 'var(--dim)') + ';color:#fff">' + (labels[status] || esc(status)) + '</span>';
 }
 
 function stepColor(status) {
