@@ -742,13 +742,67 @@ else
     FAILED=1
 fi
 
+echo ""
+echo "=== test 40: PUT /workflows/:id update ==="
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
+    -H "$AUTH" \
+    -H "Content-Type: application/json" \
+    -d '{"name":"Updated WF","description":"updated desc"}' \
+    "$API/workflows/$WF_ID")
+if [ "$HTTP_CODE" = "200" ]; then
+    echo "PASS"
+else
+    echo "FAIL: expected 200, got $HTTP_CODE"
+    FAILED=1
+fi
+
+echo ""
+echo "=== test 41: PUT /workflows/:id/steps/reorder ==="
+# 获取当前 steps
+STEPS_JSON=$(curl -s -H "$AUTH" "$API/workflows/$WF_ID")
+STEP1_ID=$(echo "$STEPS_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['steps'][0]['id'])")
+STEP2_ID=$(echo "$STEPS_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['steps'][1]['id'])")
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
+    -H "$AUTH" \
+    -H "Content-Type: application/json" \
+    -d "{\"steps\":[{\"id\":\"$STEP2_ID\",\"step_order\":0},{\"id\":\"$STEP1_ID\",\"step_order\":1}]}" \
+    "$API/workflows/$WF_ID/steps/reorder")
+if [ "$HTTP_CODE" = "200" ]; then
+    echo "PASS"
+else
+    echo "FAIL: expected 200, got $HTTP_CODE"
+    FAILED=1
+fi
+
+echo ""
+echo "=== test 42: DELETE /workflows/:id ==="
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+    -H "$AUTH" \
+    "$API/workflows/$WF_ID")
+if [ "$HTTP_CODE" = "200" ]; then
+    echo "PASS"
+else
+    echo "FAIL: expected 200, got $HTTP_CODE"
+    FAILED=1
+fi
+
+echo ""
+echo "=== test 43: GET /workflows/:id after delete → 404 ==="
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -H "$AUTH" "$API/workflows/$WF_ID")
+if [ "$HTTP_CODE" = "404" ]; then
+    echo "PASS"
+else
+    echo "FAIL: expected 404, got $HTTP_CODE"
+    FAILED=1
+fi
+
 # ──────────────────────────────────────────────
 # Summary
 # ──────────────────────────────────────────────
 
 echo ""
 if [ "$FAILED" -eq 0 ]; then
-    echo "=== ALL 43 BRIDGE TESTS PASSED ==="
+    echo "=== ALL 47 BRIDGE TESTS PASSED ==="
 else
     echo "=== SOME BRIDGE TESTS FAILED ==="
     exit 1

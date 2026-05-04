@@ -183,6 +183,7 @@ fn main() {
         let is_get = request.method() == &tiny_http::Method::Get;
         let is_post = request.method() == &tiny_http::Method::Post;
         let is_put = request.method() == &tiny_http::Method::Put;
+        let is_delete = request.method() == &tiny_http::Method::Delete;
 
         // SSE 端点：已在独立线程中处理，直接 continue
         if is_get && path == "/stream" {
@@ -547,6 +548,45 @@ fn main() {
                             routes::json_response(400, &serde_json::json!({"error": "missing workflow id"}))
                         } else {
                             workflows::handle_post_workflow_cancel(wf_id, &workflow_runner)
+                        }
+                    }
+                }
+                // PUT /workflows/:id/steps/reorder — 重排序步骤
+                (_, _, p) if is_put && p.starts_with("/workflows/") && p.ends_with("/steps/reorder") => {
+                    if !auth::check_auth(&request, &token) {
+                        routes::json_response(403, &serde_json::json!({"error": "unauthorized"}))
+                    } else {
+                        let wf_id = &p["/workflows/".len()..p.len() - "/steps/reorder".len()];
+                        if wf_id.is_empty() {
+                            routes::json_response(400, &serde_json::json!({"error": "missing workflow id"}))
+                        } else {
+                            workflows::handle_put_workflow_steps_reorder(&ctx, wf_id, &mut request)
+                        }
+                    }
+                }
+                // PUT /workflows/:id — 更新工作流
+                (_, _, p) if is_put && p.starts_with("/workflows/") => {
+                    if !auth::check_auth(&request, &token) {
+                        routes::json_response(403, &serde_json::json!({"error": "unauthorized"}))
+                    } else {
+                        let wf_id = &p["/workflows/".len()..];
+                        if wf_id.is_empty() {
+                            routes::json_response(400, &serde_json::json!({"error": "missing workflow id"}))
+                        } else {
+                            workflows::handle_put_workflow(&ctx, wf_id, &mut request)
+                        }
+                    }
+                }
+                // DELETE /workflows/:id — 删除工作流
+                (_, _, p) if is_delete && p.starts_with("/workflows/") => {
+                    if !auth::check_auth(&request, &token) {
+                        routes::json_response(403, &serde_json::json!({"error": "unauthorized"}))
+                    } else {
+                        let wf_id = &p["/workflows/".len()..];
+                        if wf_id.is_empty() {
+                            routes::json_response(400, &serde_json::json!({"error": "missing workflow id"}))
+                        } else {
+                            workflows::handle_delete_workflow(&ctx, wf_id)
                         }
                     }
                 }

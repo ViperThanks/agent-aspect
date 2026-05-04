@@ -132,6 +132,64 @@ impl AuditStore {
         Ok(rows)
     }
 
+    /// 更新工作流名称和描述。只允许 draft/failed/cancelled 状态的工作流。
+    pub fn update_workflow(
+        &self,
+        id: &str,
+        name: &str,
+        description: &str,
+        updated_at: &str,
+    ) -> CheckpointResult<usize> {
+        let rows = self
+            .conn
+            .execute(
+                "UPDATE workflows SET name = ?2, description = ?3, updated_at = ?4
+                 WHERE id = ?1 AND status IN ('draft', 'failed', 'cancelled')",
+                rusqlite::params![id, name, description, updated_at],
+            )
+            .map_err(CheckpointError::UpdateWorkflow)?;
+        Ok(rows)
+    }
+
+    /// 删除工作流及其所有步骤。只允许 draft/failed/cancelled 状态。
+    pub fn delete_workflow(&self, id: &str) -> CheckpointResult<bool> {
+        let wf = self.get_workflow(id)?;
+        match wf {
+            Some(w) if w.status == "running" => Ok(false),
+            Some(_) => {
+                self.conn.execute(
+                    "DELETE FROM workflow_steps WHERE workflow_id = ?1",
+                    rusqlite::params![id],
+                ).map_err(CheckpointError::UpdateWorkflowStep)?;
+                self.conn.execute(
+                    "DELETE FROM workflows WHERE id = ?1",
+                    rusqlite::params![id],
+                ).map_err(CheckpointError::UpdateWorkflow)?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    /// 重新排序工作流步骤。step_orders 是 (step_id, new_order) 的列表。
+    pub fn reorder_workflow_steps(
+        &self,
+        step_orders: &[(String, i64)],
+        updated_at: &str,
+    ) -> CheckpointResult<()> {
+        let tx = self.conn.unchecked_transaction()
+            .map_err(CheckpointError::UpdateWorkflowStep)?;
+        for (step_id, new_order) in step_orders {
+            tx.execute(
+                "UPDATE workflow_steps SET step_order = ?2 WHERE id = ?1",
+                rusqlite::params![step_id, new_order],
+            ).map_err(CheckpointError::UpdateWorkflowStep)?;
+        }
+        tx.commit().map_err(CheckpointError::UpdateWorkflowStep)?;
+        let _ = updated_at; // reserved for future use
+        Ok(())
+    }
+
     /// 插入工作流步骤。
     pub fn insert_workflow_step(
         &self,

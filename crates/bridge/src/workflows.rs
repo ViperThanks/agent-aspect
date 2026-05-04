@@ -545,6 +545,104 @@ pub fn handle_get_workflow(
     }))
 }
 
+/// PUT /workflows/:id — 更新工作流名称和描述。
+pub fn handle_put_workflow(
+    ctx: &crate::context::AppContext,
+    workflow_id: &str,
+    request: &mut tiny_http::Request,
+) -> tiny_http::ResponseBox {
+    let body: serde_json::Value = match read_json_body(request) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+
+    let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("");
+    let description = body.get("description").and_then(|v| v.as_str()).unwrap_or("");
+
+    let store = ctx.store.lock().unwrap();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    // 先检查是否存在
+    let wf = match store.get_workflow(workflow_id) {
+        Ok(Some(wf)) => wf,
+        Ok(None) => return json_response(404, &serde_json::json!({"error": "workflow not found"})),
+        Err(e) => return json_response(500, &serde_json::json!({"error": e.to_string()})),
+    };
+
+    if wf.status == "running" {
+        return json_response(400, &serde_json::json!({"error": "cannot edit running workflow"}));
+    }
+
+    let final_name = if name.is_empty() { &wf.name } else { name };
+    let final_desc = if description.is_empty() && body.get("description").is_none() { &wf.description } else { description };
+
+    match store.update_workflow(workflow_id, final_name, final_desc, &now) {
+        Ok(0) => json_response(400, &serde_json::json!({"error": "cannot edit workflow in current state"})),
+        Ok(_) => json_response(200, &serde_json::json!({"id": workflow_id, "status": "updated"})),
+        Err(e) => json_response(500, &serde_json::json!({"error": e.to_string()})),
+    }
+}
+
+/// DELETE /workflows/:id — 删除工作流。
+pub fn handle_delete_workflow(
+    ctx: &crate::context::AppContext,
+    workflow_id: &str,
+) -> tiny_http::ResponseBox {
+    let store = ctx.store.lock().unwrap();
+    match store.delete_workflow(workflow_id) {
+        Ok(true) => json_response(200, &serde_json::json!({"id": workflow_id, "status": "deleted"})),
+        Ok(false) => json_response(404, &serde_json::json!({"error": "workflow not found or running"})),
+        Err(e) => json_response(500, &serde_json::json!({"error": e.to_string()})),
+    }
+}
+
+/// PUT /workflows/:id/steps/reorder — 重排序步骤。
+pub fn handle_put_workflow_steps_reorder(
+    ctx: &crate::context::AppContext,
+    workflow_id: &str,
+    request: &mut tiny_http::Request,
+) -> tiny_http::ResponseBox {
+    let body: serde_json::Value = match read_json_body(request) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+
+    let steps = match body.get("steps").and_then(|v| v.as_array()) {
+        Some(s) => s,
+        _ => return json_response(400, &serde_json::json!({"error": "steps array required"})),
+    };
+
+    let store = ctx.store.lock().unwrap();
+
+    // 验证 workflow 存在且可编辑
+    let wf = match store.get_workflow(workflow_id) {
+        Ok(Some(wf)) => wf,
+        Ok(None) => return json_response(404, &serde_json::json!({"error": "workflow not found"})),
+        Err(e) => return json_response(500, &serde_json::json!({"error": e.to_string()})),
+    };
+
+    if wf.status == "running" {
+        return json_response(400, &serde_json::json!({"error": "cannot reorder running workflow"}));
+    }
+
+    // 解析 step_orders: [{"id": "...", "step_order": 0}, ...]
+    let mut step_orders = Vec::new();
+    for (i, s) in steps.iter().enumerate() {
+        let step_id = s.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let order = s.get("step_order").and_then(|v| v.as_i64()).unwrap_or(i as i64);
+        if step_id.is_empty() {
+            return json_response(400, &serde_json::json!({"error": format!("step {i} missing id")}));
+        }
+        step_orders.push((step_id.to_string(), order));
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    match store.reorder_workflow_steps(&step_orders, &now) {
+        Ok(()) => json_response(200, &serde_json::json!({"status": "reordered"})),
+        Err(e) => json_response(500, &serde_json::json!({"error": e.to_string()})),
+    }
+}
+
 /// POST /workflows/:id/run — 触发工作流执行。
 pub fn handle_post_workflow_run(
     workflow_id: &str,
