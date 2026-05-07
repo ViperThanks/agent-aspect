@@ -607,7 +607,10 @@ impl AuditStore {
     fn migrate_v18_message_thinking(&self) -> CheckpointResult<()> {
         if !self.column_exists("conversation_messages", "thinking")? {
             self.conn
-                .execute("ALTER TABLE conversation_messages ADD COLUMN thinking TEXT", [])
+                .execute(
+                    "ALTER TABLE conversation_messages ADD COLUMN thinking TEXT",
+                    [],
+                )
                 .map_err(CheckpointError::MigrateConversationSchema)?;
         }
         Ok(())
@@ -1189,10 +1192,30 @@ mod tests {
         let store = AuditStore::open_in_memory().expect("open in-memory db");
         let now = "2026-04-25T10:00:00Z";
         store
-            .insert_job("queued", "git_status", "{}", now, None, None, None, None, None)
+            .insert_job(
+                "queued",
+                "git_status",
+                "{}",
+                now,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
             .unwrap();
         store
-            .insert_job("running", "git_status", "{}", now, None, None, None, None, None)
+            .insert_job(
+                "running",
+                "git_status",
+                "{}",
+                now,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
             .unwrap();
         store
             .update_job_started_supervised(
@@ -1881,11 +1904,17 @@ mod tests {
         let job = store.get_job("j-stop").unwrap().unwrap();
         assert_eq!(job.status, "failed");
         assert_eq!(job.completed_reason.as_deref(), Some("stop_requested"));
-        assert_eq!(job.failure_reason.as_deref(), Some("[aspect-stop] hook received"));
+        assert_eq!(
+            job.failure_reason.as_deref(),
+            Some("[aspect-stop] hook received")
+        );
         assert_eq!(job.stop_requested_at.as_deref(), Some(stop_time));
 
         let logs = store.get_job_logs("j-stop").unwrap();
-        assert!(logs.iter().any(|l| l.chunk.contains("[aspect-stop] hook received")));
+        assert!(
+            logs.iter()
+                .any(|l| l.chunk.contains("[aspect-stop] hook received"))
+        );
 
         // 7. No longer in stopped list (terminal state)
         let stopped = store.get_jobs_with_stop_requested().unwrap();

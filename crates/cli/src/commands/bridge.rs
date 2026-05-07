@@ -194,24 +194,25 @@ pub fn verify_bridge_pid(pid: u32, expected_exe: &str) -> (bool, bool) {
     (true, comm_name == expected_name)
 }
 
-/// 定位当前可用的 bridge binary；改名迁移期回退旧名。
+/// 定位当前可用的 bridge binary。
 fn resolve_bridge_bin() -> Option<std::path::PathBuf> {
     bridge_bin_candidates().into_iter().next()
 }
 
-/// 所有可接受的 bridge binary 路径，按新名优先。
+/// 所有可接受的 bridge binary 路径。
 fn bridge_bin_candidates() -> Vec<std::path::PathBuf> {
     let Some(dir) = bin_dir() else {
         return Vec::new();
     };
-    ["agent-aspect-bridge", "checkpoint-bridge"]
-        .into_iter()
-        .map(|name| dir.join(name))
-        .filter(|p| p.exists())
-        .collect()
+    let bridge_bin = dir.join("agent-aspect-bridge");
+    if bridge_bin.exists() {
+        vec![bridge_bin]
+    } else {
+        Vec::new()
+    }
 }
 
-/// pid 是否匹配任一新旧 bridge binary。
+/// pid 是否匹配当前 bridge binary。
 fn verify_bridge_pid_against_candidates(pid: u32) -> Option<String> {
     bridge_bin_candidates().into_iter().find_map(|bin| {
         let expected = bin.to_string_lossy().to_string();
@@ -333,9 +334,7 @@ fn bridge_start() {
     }
 
     let Some(bridge_bin) = resolve_bridge_bin() else {
-        eprintln!(
-            "FAIL: agent-aspect-bridge not found next to current CLI (legacy checkpoint-bridge also missing)"
-        );
+        eprintln!("FAIL: agent-aspect-bridge not found next to current CLI");
         std::process::exit(1);
     };
 
@@ -786,11 +785,6 @@ fn bridge_install(args: &[String]) {
         std::process::exit(1);
     };
     let bridge_bin = dir.join("agent-aspect-bridge");
-    let bridge_bin = if bridge_bin.exists() {
-        bridge_bin
-    } else {
-        dir.join("checkpoint-bridge")
-    };
     if !bridge_bin.exists() {
         eprintln!(
             "FAIL: agent-aspect-bridge not found at {}",

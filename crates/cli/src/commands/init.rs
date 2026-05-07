@@ -6,8 +6,8 @@
 //!
 //! 关键不变量：
 //! - 修改前自动备份原文件（带时间戳）
-//! - 已安装过的不重复写入（通过检查 "checkpoint-hook" 标记判断）
-//! - hook 命令中注入 `CHECKPOINT_AGENT=<agent>` 环境变量
+//! - 已安装过的不重复写入（通过检查 "agent-aspect-hook" 标记判断）
+//! - hook 命令中注入 `AGENT_ASPECT_AGENT=<agent>` 环境变量
 
 use checkpoint_core::paths;
 
@@ -49,18 +49,11 @@ fn init_agents() {
         eprintln!("FAIL: cannot determine binary directory");
         std::process::exit(1);
     };
-    // Prefer new binary name, fall back to legacy
     let hook_bin = dir.join("agent-aspect-hook");
-    let hook_bin = if hook_bin.exists() {
-        hook_bin
-    } else {
-        let legacy = dir.join("checkpoint-hook");
-        if !legacy.exists() {
-            eprintln!("FAIL: agent-aspect-hook not found at {}", dir.display());
-            std::process::exit(1);
-        }
-        legacy
-    };
+    if !hook_bin.exists() {
+        eprintln!("FAIL: agent-aspect-hook not found at {}", dir.display());
+        std::process::exit(1);
+    }
     let hook = hook_bin
         .canonicalize()
         .unwrap_or(hook_bin)
@@ -415,7 +408,6 @@ mod tests {
     #[test]
     fn install_kimi_registers_stop_hook() {
         let path = std::path::PathBuf::from("/tmp/test-kimi-config.toml");
-        let command = "AGENT_ASPECT_AGENT=kimi /usr/local/bin/agent-aspect-hook";
         let content = std::fs::read_to_string(&path).unwrap_or_default();
 
         // Kimi uses TOML [[hooks]] sections

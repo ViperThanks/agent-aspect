@@ -9,10 +9,6 @@ name = "checkpoint_cli"
 path = "src/lib.rs"
 
 [[bin]]
-name = "checkpoint"
-path = "src/main.rs"
-
-[[bin]]
 name = "agent-aspect"
 path = "src/main.rs"
 

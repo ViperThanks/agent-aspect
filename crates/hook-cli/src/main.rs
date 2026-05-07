@@ -45,9 +45,7 @@ fn main() {
                 return;
             }
             // Guard/Learn/Paranoid 模式下 daemon 不可达 -> 拒绝（fail-closed）
-            eprintln!(
-                "agent-aspect-hook: daemon unreachable in {mode:?} mode — denying tool call"
-            );
+            eprintln!("agent-aspect-hook: daemon unreachable in {mode:?} mode — denying tool call");
             emit_hook_response(Action::Deny, "daemon unreachable");
             std::process::exit(2);
         }

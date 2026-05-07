@@ -48,7 +48,8 @@ pub fn cmd_mode(new_mode: Option<&str>) {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o600));
+                let _ =
+                    std::fs::set_permissions(&config_path, std::fs::Permissions::from_mode(0o600));
             }
             println!("mode set to {}", mode);
             println!("daemon will pick up on next request");

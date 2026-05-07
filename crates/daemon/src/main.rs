@@ -118,7 +118,10 @@ fn read_fully(stream: &mut UnixStream) -> Option<String> {
             Ok(n) => {
                 buf.extend_from_slice(&tmp[..n]);
                 if buf.len() > MAX_IPC_MESSAGE_BYTES {
-                    log_info!("IPC message too large ({} bytes), dropping connection", buf.len());
+                    log_info!(
+                        "IPC message too large ({} bytes), dropping connection",
+                        buf.len()
+                    );
                     return None;
                 }
             }
@@ -450,11 +453,8 @@ fn handle_stop(
             if let Ok(Some(wf)) = store.get_workflow(wf_id) {
                 if wf.advance_mode == "manual" {
                     let _ = store.insert_workflow_advance_signal(
-                        wf_id,
-                        None, // step_id 由 bridge 根据 workflow 状态推断
-                        agent_str,
-                        "stop",
-                        &now,
+                        wf_id, None, // step_id 由 bridge 根据 workflow 状态推断
+                        agent_str, "stop", &now,
                     );
                     log_info!(
                         "[aspect-stop] advance signal queued for workflow {} (manual mode)",
@@ -493,7 +493,10 @@ fn handle_override(
     match store.event_exists(&msg.event_id) {
         Ok(true) => {}
         Ok(false) => {
-            log_info!("override rejected — event {} not found", &msg.event_id[..8.min(msg.event_id.len())]);
+            log_info!(
+                "override rejected — event {} not found",
+                &msg.event_id[..8.min(msg.event_id.len())]
+            );
             let resp = WireResponse {
                 event_id: Some(msg.event_id.clone()),
                 action: Action::Deny,

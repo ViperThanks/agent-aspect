@@ -66,11 +66,6 @@ fn daemon_start() {
         std::process::exit(1);
     };
     let daemon_bin = dir.join("agent-aspectd");
-    let daemon_bin = if daemon_bin.exists() {
-        daemon_bin
-    } else {
-        dir.join("checkpointd")
-    };
     if !daemon_bin.exists() {
         eprintln!("FAIL: agent-aspectd not found at {}", daemon_bin.display());
         std::process::exit(1);

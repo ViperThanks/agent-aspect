@@ -63,7 +63,7 @@
 | `transcript_sync.rs` | 增量 transcript 同步：行偏移游标 + 断点续传 |
 | `rule.rs` | 规则引擎：10 条内置规则按 Mode 分级评估 |
 | `learn.rs` | 学习引擎：分析审计历史生成自动允许建议 |
-| `process_guard.rs` | 单实例守护：PID 检测 + 优雅关闭旧进程 |
+| `process_guard.rs` | 单实例守护：PID 检测 + 精确进程名验证 + 优雅关闭旧进程 |
 
 ---
 
@@ -156,7 +156,7 @@
 | `commands/init.rs` | 为 Claude Code / Codex CLI / Kimi Code 安装 hook 配置 |
 | `commands/conversations.rs` | 从 provider transcript 导入会话标题 |
 | `commands/daemon.rs` | agent-aspectd daemon start/stop/restart/status |
-| `commands/helpers.rs` | 跨命令共享辅助：二进制目录定位和 launchctl 调用封装 |
+| `commands/helpers.rs` | 跨命令共享辅助：按 agent-aspect 新命名定位兄弟二进制和封装 launchctl 调用 |
 
 ---
 

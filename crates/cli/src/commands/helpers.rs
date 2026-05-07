@@ -5,7 +5,7 @@
 
 /// 返回当前可执行文件所在目录。
 ///
-/// 约定：checkpoint / checkpointd / checkpoint-hook / checkpoint-bridge
+/// 约定：agent-aspect / agent-aspectd / agent-aspect-hook / agent-aspect-bridge
 /// 都安装在同一个目录下，所以通过当前二进制路径定位兄弟可执行文件。
 pub fn bin_dir() -> Option<std::path::PathBuf> {
     std::env::current_exe()

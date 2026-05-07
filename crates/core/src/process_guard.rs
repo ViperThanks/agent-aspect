@@ -120,20 +120,11 @@ fn process_name(pid: u32) -> Option<String> {
 
 /// 判断实际进程名是否匹配期望名。
 ///
-/// 改名迁移期允许旧 binary 名继续作为同一身份：
-/// - agent-aspect-bridge ↔ checkpoint-bridge
-/// - agent-aspectd ↔ checkpointd
-///
-/// 这只放宽 checkpoint 自身的新旧名称，不允许任意前缀匹配。
+/// 改名迁移完成后，运行期只接受精确进程名匹配。
+/// 旧 `checkpoint*` 服务必须通过 launchd label 显式清理，不能在新服务的
+/// PID 守护路径中被当作同一身份，否则会误杀正在服务 hook 的新进程。
 fn process_name_matches(actual: &str, expected: &str) -> bool {
     actual == expected
-        || matches!(
-            (expected, actual),
-            ("agent-aspect-bridge", "checkpoint-bridge")
-                | ("checkpoint-bridge", "agent-aspect-bridge")
-                | ("agent-aspectd", "checkpointd")
-                | ("checkpointd", "agent-aspectd")
-        )
 }
 
 /// 优雅关闭：先 SIGTERM 等待最多 1 秒，未退出则 SIGKILL。
@@ -161,11 +152,11 @@ mod tests {
             "agent-aspect-bridge",
             "agent-aspect-bridge"
         ));
-        assert!(process_name_matches(
+        assert!(!process_name_matches(
             "checkpoint-bridge",
             "agent-aspect-bridge"
         ));
-        assert!(process_name_matches(
+        assert!(!process_name_matches(
             "agent-aspect-bridge",
             "checkpoint-bridge"
         ));
@@ -174,8 +165,8 @@ mod tests {
     #[test]
     fn process_name_matches_current_and_legacy_daemon_names() {
         assert!(process_name_matches("agent-aspectd", "agent-aspectd"));
-        assert!(process_name_matches("checkpointd", "agent-aspectd"));
-        assert!(process_name_matches("agent-aspectd", "checkpointd"));
+        assert!(!process_name_matches("checkpointd", "agent-aspectd"));
+        assert!(!process_name_matches("agent-aspectd", "checkpointd"));
     }
 
     #[test]

@@ -33,12 +33,13 @@ fn home_dir() -> PathBuf {
         // Safety: getpwuid returns a thread-local or static buffer on success, null on failure.
         // We read pw_dir immediately and convert to owned String before the pointer can be reused.
         let pw_home = unsafe {
-            libc::getpwuid(libc::getuid())
-                .as_ref()
-                .and_then(|pw| {
-                    let c_str = std::ffi::CStr::from_ptr(pw.pw_dir).to_bytes();
-                    std::str::from_utf8(c_str).ok().filter(|s| !s.is_empty()).map(String::from)
-                })
+            libc::getpwuid(libc::getuid()).as_ref().and_then(|pw| {
+                let c_str = std::ffi::CStr::from_ptr(pw.pw_dir).to_bytes();
+                std::str::from_utf8(c_str)
+                    .ok()
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+            })
         };
         if let Some(ph) = pw_home {
             return PathBuf::from(ph);

@@ -13,10 +13,10 @@ APP_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEST="$APP_DIR/Resources/Binaries"
 
 BINARIES=(
-    "checkpoint"
-    "checkpointd"
-    "checkpoint-bridge"
-    "checkpoint-hook-cli"
+    "agent-aspect"
+    "agent-aspectd"
+    "agent-aspect-bridge"
+    "agent-aspect-hook"
 )
 
 echo "==> Copying binaries to $DEST/"
