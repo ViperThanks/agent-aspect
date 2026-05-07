@@ -36,6 +36,8 @@ pub struct Config {
     pub relay_url: Option<String>,
     #[serde(default)]
     pub approval_review: ApprovalReviewConfig,
+    #[serde(default = "default_true")]
+    pub pretooluse_enabled: bool,
 }
 
 /// 审批 review payload 配置 — 控制 /pending 响应中 review 字段展示哪些内容。
@@ -138,6 +140,7 @@ impl Config {
             providers: HashMap::new(),
             relay_url: None,
             approval_review: ApprovalReviewConfig::default(),
+            pretooluse_enabled: true,
         }
     }
 

@@ -107,6 +107,16 @@ relay_url = "wss://relay.example.com/ws"
 
 Default: not set (relay disabled)
 
+### `pretooluse_enabled`
+
+Enable or disable PreToolUse evaluation. When disabled, the daemon immediately returns "allow" for every tool call without running the rule engine.
+
+```toml
+pretooluse_enabled = true
+```
+
+Default: `true` (enabled). The hook still fires and reaches the daemon; only the rule engine evaluation is bypassed. Useful for temporarily disabling guard enforcement without removing hooks.
+
 ### `provider_binaries`
 
 Override the binary path for specific agents. Legacy format; prefer `[providers.*]`.

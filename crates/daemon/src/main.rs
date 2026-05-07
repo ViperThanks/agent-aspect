@@ -166,6 +166,21 @@ fn handle_client(mut stream: UnixStream, store: &AuditStore, engine: &RuleEngine
                 log_info!("register device failed: {e}");
             }
 
+            // PreToolUse 评估开关关闭时，直接放行，不运行规则引擎。
+            let pretooluse_enabled = Config::load(&Config::config_path())
+                .map(|c| c.pretooluse_enabled)
+                .unwrap_or(true);
+            if !pretooluse_enabled {
+                log_info!("pretooluse evaluation disabled, allowing");
+                let resp = WireResponse {
+                    event_id: None,
+                    action: Action::Allow,
+                    note: "pretooluse evaluation disabled".to_string(),
+                };
+                write_wire_response(&mut stream, &resp);
+                return;
+            }
+
             // 根据 agent 类型选择对应的 payload 规范化函数
             let normalize_fn = match agent {
                 Some(AgentId::CodexCli) => normalize_codex_pre_tool_use,
