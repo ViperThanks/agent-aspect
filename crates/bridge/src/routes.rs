@@ -115,9 +115,7 @@ pub fn read_json_body(
 }
 
 /// 读取请求体（带大小限制），超过 MAX_BODY_BYTES 时返回 413。
-pub fn read_body(
-    request: &mut tiny_http::Request,
-) -> Result<String, tiny_http::ResponseBox> {
+pub fn read_body(request: &mut tiny_http::Request) -> Result<String, tiny_http::ResponseBox> {
     let mut buf = Vec::with_capacity(4096);
     let reader = request.as_reader();
     let mut tmp = [0u8; 8192];
@@ -142,7 +140,10 @@ pub fn read_body(
         }
     }
     String::from_utf8(buf).map_err(|e| {
-        json_response(400, &serde_json::json!({"error": format!("invalid utf8: {e}")}))
+        json_response(
+            400,
+            &serde_json::json!({"error": format!("invalid utf8: {e}")}),
+        )
     })
 }
 
@@ -202,7 +203,10 @@ pub fn handle_post_login(
     {
         let mut guard = LOGIN_GUARD.lock().unwrap();
         if !guard.try_acquire() {
-            return json_response(429, &serde_json::json!({"error": "too many login attempts, try again later"}));
+            return json_response(
+                429,
+                &serde_json::json!({"error": "too many login attempts, try again later"}),
+            );
         }
     }
 

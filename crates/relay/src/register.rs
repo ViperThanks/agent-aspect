@@ -434,7 +434,8 @@ mod tests {
             label: "test".to_string(),
             ttl_days: 30,
         };
-        let reg_resp = handle_register(State(state.clone()), test_connect_info(), Json(reg_req)).await;
+        let reg_resp =
+            handle_register(State(state.clone()), test_connect_info(), Json(reg_req)).await;
         let body = extract_json(reg_resp).await;
         let sid = body["sid"].as_str().unwrap().to_string();
 

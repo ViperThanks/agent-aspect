@@ -56,14 +56,8 @@ pub fn app(state: Arc<crate::AppState>) -> Router {
         .route("/api/workflows/{id}", get(crate::http::proxy_get))
         .route("/api/workflows/{id}", put(crate::http::proxy_put))
         .route("/api/workflows/{id}", delete(crate::http::proxy_delete))
-        .route(
-            "/api/workflows/{id}/run",
-            post(crate::http::proxy_post),
-        )
-        .route(
-            "/api/workflows/{id}/cancel",
-            post(crate::http::proxy_post),
-        )
+        .route("/api/workflows/{id}/run", post(crate::http::proxy_post))
+        .route("/api/workflows/{id}/cancel", post(crate::http::proxy_post))
         .route(
             "/api/workflows/{id}/steps/reorder",
             put(crate::http::proxy_put),

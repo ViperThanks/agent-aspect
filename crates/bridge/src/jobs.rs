@@ -553,16 +553,16 @@ impl JobRunner {
         }
 
         // 2. 确保 DB 中没有 active jobs
-        let store = AuditStore::open(&self.db_path)
-            .map_err(|e| format!("open db: {e}"))?;
-        let active = store.count_active_jobs()
+        let store = AuditStore::open(&self.db_path).map_err(|e| format!("open db: {e}"))?;
+        let active = store
+            .count_active_jobs()
             .map_err(|e| format!("count active: {e}"))?;
         if active > 0 {
             // 等待 active job 完成
             loop {
-                let store = AuditStore::open(&self.db_path)
-                    .map_err(|e| format!("open db: {e}"))?;
-                let count = store.count_active_jobs()
+                let store = AuditStore::open(&self.db_path).map_err(|e| format!("open db: {e}"))?;
+                let count = store
+                    .count_active_jobs()
                     .map_err(|e| format!("count active: {e}"))?;
                 if count == 0 {
                     break;
@@ -586,25 +586,27 @@ impl JobRunner {
             project_path,
             &self.resolver,
             &self.registry,
-        ).map_err(|e| format!("build command: {e}"))?;
+        )
+        .map_err(|e| format!("build command: {e}"))?;
 
         // 5. 插入 job 到 DB
-        let store = AuditStore::open(&self.db_path)
-            .map_err(|e| format!("open db: {e}"))?;
+        let store = AuditStore::open(&self.db_path).map_err(|e| format!("open db: {e}"))?;
         let job_id = uuid::Uuid::now_v7().to_string();
         let now = chrono::Utc::now().to_rfc3339();
 
-        store.insert_job(
-            &job_id,
-            step_kind,
-            &command_input.to_string(),
-            &now,
-            Some(provider),
-            project_path,
-            conversation_id,
-            Some(prompt),
-            workflow_id,
-        ).map_err(|e| format!("insert job: {e}"))?;
+        store
+            .insert_job(
+                &job_id,
+                step_kind,
+                &command_input.to_string(),
+                &now,
+                Some(provider),
+                project_path,
+                conversation_id,
+                Some(prompt),
+                workflow_id,
+            )
+            .map_err(|e| format!("insert job: {e}"))?;
 
         // 5a. 审计：workflow step job 提交
         if let Some(wf_id) = workflow_id {
@@ -640,7 +642,8 @@ impl JobRunner {
                 "job_id": job_id,
                 "status": "queued",
                 "failure_reason": null,
-            }).to_string(),
+            })
+            .to_string(),
         });
 
         // 8. Spawn exec_job
@@ -671,7 +674,8 @@ impl JobRunner {
         });
 
         // 9. 等待 exec_job 完成
-        completion_rx.recv()
+        completion_rx
+            .recv()
             .map_err(|_| "completion channel closed".to_string())?;
 
         // 10. 返回 job_id

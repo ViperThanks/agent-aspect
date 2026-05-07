@@ -80,11 +80,9 @@ where
             let jti = verified.payload.jti.clone();
             if cache.contains_key(&jti) {
                 log_auth_failure(&method, &path, &device_id, 401, "token_replayed");
-                return Err((
-                    StatusCode::UNAUTHORIZED,
-                    r#"{"error":"token_replayed"}"#,
-                )
-                    .into_response());
+                return Err(
+                    (StatusCode::UNAUTHORIZED, r#"{"error":"token_replayed"}"#).into_response()
+                );
             }
             cache.insert(jti, now);
         }
@@ -92,11 +90,9 @@ where
         // per-client 速率限制
         if !app.client_limiter.lock().await.try_acquire(&sid) {
             log_auth_failure(&method, &path, &device_id, 429, "rate_limited");
-            return Err((
-                StatusCode::TOO_MANY_REQUESTS,
-                r#"{"error":"rate_limited"}"#,
-            )
-                .into_response());
+            return Err(
+                (StatusCode::TOO_MANY_REQUESTS, r#"{"error":"rate_limited"}"#).into_response(),
+            );
         }
 
         Ok(VerifiedClient { sid, device_id })

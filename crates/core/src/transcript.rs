@@ -72,7 +72,7 @@ fn read_claude_transcript(
                             tool_name: None,
                             tool_input_preview: None,
                             tool_input_full: None,
-                        thinking: None,
+                            thinking: None,
                         });
                     }
                 }
@@ -134,7 +134,9 @@ fn extract_claude_assistant_blocks(v: &serde_json::Value, messages: &mut Vec<Tra
     let mut thinking_buf: Option<String> = None;
 
     // flush accumulated text+thinking as an assistant message
-    let flush_assistant = |text_buf: &mut String, thinking_buf: &mut Option<String>, messages: &mut Vec<TranscriptMessage>| {
+    let flush_assistant = |text_buf: &mut String,
+                           thinking_buf: &mut Option<String>,
+                           messages: &mut Vec<TranscriptMessage>| {
         if !text_buf.is_empty() || thinking_buf.is_some() {
             messages.push(TranscriptMessage {
                 role: "assistant".into(),
@@ -249,7 +251,7 @@ fn read_codex_transcript(transcript_path: Option<&str>) -> Option<Vec<Transcript
                                     tool_name: None,
                                     tool_input_preview: None,
                                     tool_input_full: None,
-                                thinking: None,
+                                    thinking: None,
                                 });
                             }
                         }
@@ -269,17 +271,24 @@ fn read_codex_transcript(transcript_path: Option<&str>) -> Option<Vec<Transcript
                                     tool_name: None,
                                     tool_input_preview: None,
                                     tool_input_full: None,
-                                thinking: None,
+                                    thinking: None,
                                 });
                             }
                         }
                     }
                     "reasoning" | "reasoning_summary" => {
-                        if let Some(text) = payload.get("summary").and_then(|s| s.as_str()).or_else(|| payload.get("text").and_then(|s| s.as_str())) {
+                        if let Some(text) = payload
+                            .get("summary")
+                            .and_then(|s| s.as_str())
+                            .or_else(|| payload.get("text").and_then(|s| s.as_str()))
+                        {
                             if !text.is_empty() {
                                 messages.push(TranscriptMessage {
                                     role: "assistant".into(),
-                                    timestamp: v.get("timestamp").and_then(|t| t.as_str()).map(String::from),
+                                    timestamp: v
+                                        .get("timestamp")
+                                        .and_then(|t| t.as_str())
+                                        .map(String::from),
                                     text: String::new(),
                                     source: "transcript".into(),
                                     turn_id: None,
@@ -326,7 +335,7 @@ fn read_codex_transcript(transcript_path: Option<&str>) -> Option<Vec<Transcript
                         tool_name: Some(name.to_string()),
                         tool_input_preview: input_preview,
                         tool_input_full: input_full,
-                    thinking: None,
+                        thinking: None,
                     });
                 } else if ptype == "custom_tool_call" {
                     let name = payload
@@ -354,7 +363,7 @@ fn read_codex_transcript(transcript_path: Option<&str>) -> Option<Vec<Transcript
                         tool_name: Some(name.to_string()),
                         tool_input_preview: input_preview,
                         tool_input_full: input_full,
-                    thinking: None,
+                        thinking: None,
                     });
                 } else if ptype == "web_search_call" {
                     let query = payload
@@ -462,7 +471,7 @@ fn read_kimi_transcript(session_id: &str) -> Option<Vec<TranscriptMessage>> {
                                 tool_name: None,
                                 tool_input_preview: None,
                                 tool_input_full: None,
-                            thinking: None,
+                                thinking: None,
                             });
                         }
                     }
@@ -482,7 +491,7 @@ fn read_kimi_transcript(session_id: &str) -> Option<Vec<TranscriptMessage>> {
                                     tool_name: None,
                                     tool_input_preview: None,
                                     tool_input_full: None,
-                                thinking: None,
+                                    thinking: None,
                                 });
                             }
                         }
@@ -512,7 +521,7 @@ fn read_kimi_transcript(session_id: &str) -> Option<Vec<TranscriptMessage>> {
                             tool_name: Some(name.to_string()),
                             tool_input_preview: input_preview,
                             tool_input_full: input_full,
-                        thinking: None,
+                            thinking: None,
                         });
                     }
                 }
@@ -602,7 +611,7 @@ pub fn parse_claude_line(line: &str) -> Result<Vec<TranscriptMessage>, String> {
                         tool_name: None,
                         tool_input_preview: None,
                         tool_input_full: None,
-                    thinking: None,
+                        thinking: None,
                     });
                 }
             }
@@ -645,7 +654,7 @@ pub fn parse_codex_line(line: &str) -> Result<Vec<TranscriptMessage>, String> {
                                 tool_name: None,
                                 tool_input_preview: None,
                                 tool_input_full: None,
-                            thinking: None,
+                                thinking: None,
                             });
                         }
                     }
@@ -665,17 +674,24 @@ pub fn parse_codex_line(line: &str) -> Result<Vec<TranscriptMessage>, String> {
                                 tool_name: None,
                                 tool_input_preview: None,
                                 tool_input_full: None,
-                            thinking: None,
+                                thinking: None,
                             });
                         }
                     }
                 }
                 "reasoning" | "reasoning_summary" => {
-                    if let Some(text) = payload.get("summary").and_then(|s| s.as_str()).or_else(|| payload.get("text").and_then(|s| s.as_str())) {
+                    if let Some(text) = payload
+                        .get("summary")
+                        .and_then(|s| s.as_str())
+                        .or_else(|| payload.get("text").and_then(|s| s.as_str()))
+                    {
                         if !text.is_empty() {
                             messages.push(TranscriptMessage {
                                 role: "assistant".into(),
-                                timestamp: v.get("timestamp").and_then(|t| t.as_str()).map(String::from),
+                                timestamp: v
+                                    .get("timestamp")
+                                    .and_then(|t| t.as_str())
+                                    .map(String::from),
                                 text: String::new(),
                                 source: "transcript".into(),
                                 turn_id: None,
@@ -722,7 +738,7 @@ pub fn parse_codex_line(line: &str) -> Result<Vec<TranscriptMessage>, String> {
                     tool_name: Some(name.to_string()),
                     tool_input_preview: input_preview,
                     tool_input_full: input_full,
-                thinking: None,
+                    thinking: None,
                 });
             } else if ptype == "custom_tool_call" {
                 let name = payload
@@ -750,7 +766,7 @@ pub fn parse_codex_line(line: &str) -> Result<Vec<TranscriptMessage>, String> {
                     tool_name: Some(name.to_string()),
                     tool_input_preview: input_preview,
                     tool_input_full: input_full,
-                thinking: None,
+                    thinking: None,
                 });
             } else if ptype == "web_search_call" {
                 let query = payload
@@ -835,7 +851,7 @@ pub fn parse_kimi_line(line: &str) -> Result<Vec<TranscriptMessage>, String> {
                         tool_name: None,
                         tool_input_preview: None,
                         tool_input_full: None,
-                    thinking: None,
+                        thinking: None,
                     });
                 }
             }
@@ -855,7 +871,7 @@ pub fn parse_kimi_line(line: &str) -> Result<Vec<TranscriptMessage>, String> {
                             tool_name: None,
                             tool_input_preview: None,
                             tool_input_full: None,
-                        thinking: None,
+                            thinking: None,
                         });
                     }
                 }
@@ -885,7 +901,7 @@ pub fn parse_kimi_line(line: &str) -> Result<Vec<TranscriptMessage>, String> {
                     tool_name: Some(name.to_string()),
                     tool_input_preview: input_preview,
                     tool_input_full: input_full,
-                thinking: None,
+                    thinking: None,
                 });
             }
         }

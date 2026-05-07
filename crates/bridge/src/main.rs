@@ -556,7 +556,10 @@ fn main() {
                     } else {
                         let wf_id = &p["/workflows/".len()..p.len() - "/run".len()];
                         if wf_id.is_empty() {
-                            routes::json_response(400, &serde_json::json!({"error": "missing workflow id"}))
+                            routes::json_response(
+                                400,
+                                &serde_json::json!({"error": "missing workflow id"}),
+                            )
                         } else {
                             workflows::handle_post_workflow_run(wf_id, &workflow_runner)
                         }
@@ -568,7 +571,10 @@ fn main() {
                     } else {
                         let wf_id = &p["/workflows/".len()..p.len() - "/next-step".len()];
                         if wf_id.is_empty() {
-                            routes::json_response(400, &serde_json::json!({"error": "missing workflow id"}))
+                            routes::json_response(
+                                400,
+                                &serde_json::json!({"error": "missing workflow id"}),
+                            )
                         } else {
                             workflows::handle_post_workflow_next_step(wf_id, &ctx)
                         }
@@ -580,20 +586,28 @@ fn main() {
                     } else {
                         let wf_id = &p["/workflows/".len()..p.len() - "/cancel".len()];
                         if wf_id.is_empty() {
-                            routes::json_response(400, &serde_json::json!({"error": "missing workflow id"}))
+                            routes::json_response(
+                                400,
+                                &serde_json::json!({"error": "missing workflow id"}),
+                            )
                         } else {
                             workflows::handle_post_workflow_cancel(wf_id, &workflow_runner)
                         }
                     }
                 }
                 // PUT /workflows/:id/steps/reorder — 重排序步骤
-                (_, _, p) if is_put && p.starts_with("/workflows/") && p.ends_with("/steps/reorder") => {
+                (_, _, p)
+                    if is_put && p.starts_with("/workflows/") && p.ends_with("/steps/reorder") =>
+                {
                     if !auth::check_auth(&request, &token) {
                         routes::json_response(403, &serde_json::json!({"error": "unauthorized"}))
                     } else {
                         let wf_id = &p["/workflows/".len()..p.len() - "/steps/reorder".len()];
                         if wf_id.is_empty() {
-                            routes::json_response(400, &serde_json::json!({"error": "missing workflow id"}))
+                            routes::json_response(
+                                400,
+                                &serde_json::json!({"error": "missing workflow id"}),
+                            )
                         } else {
                             workflows::handle_put_workflow_steps_reorder(&ctx, wf_id, &mut request)
                         }
@@ -606,7 +620,10 @@ fn main() {
                     } else {
                         let wf_id = &p["/workflows/".len()..];
                         if wf_id.is_empty() {
-                            routes::json_response(400, &serde_json::json!({"error": "missing workflow id"}))
+                            routes::json_response(
+                                400,
+                                &serde_json::json!({"error": "missing workflow id"}),
+                            )
                         } else {
                             workflows::handle_put_workflow(&ctx, wf_id, &mut request)
                         }
@@ -619,14 +636,21 @@ fn main() {
                     } else {
                         let wf_id = &p["/workflows/".len()..];
                         if wf_id.is_empty() {
-                            routes::json_response(400, &serde_json::json!({"error": "missing workflow id"}))
+                            routes::json_response(
+                                400,
+                                &serde_json::json!({"error": "missing workflow id"}),
+                            )
                         } else {
                             workflows::handle_delete_workflow(&ctx, wf_id)
                         }
                     }
                 }
                 // GET /workflows/:id/steps/:step_id/logs — 获取步骤的 job 日志
-                (true, _, p) if p.starts_with("/workflows/") && p.contains("/steps/") && p.ends_with("/logs") => {
+                (true, _, p)
+                    if p.starts_with("/workflows/")
+                        && p.contains("/steps/")
+                        && p.ends_with("/logs") =>
+                {
                     if !auth::check_auth(&request, &token) {
                         routes::json_response(403, &serde_json::json!({"error": "unauthorized"}))
                     } else {
@@ -638,12 +662,20 @@ fn main() {
                             let step_and_rest = parts[1];
                             let step_id = step_and_rest.trim_end_matches("/logs");
                             if wf_id.is_empty() || step_id.is_empty() {
-                                routes::json_response(400, &serde_json::json!({"error": "missing ids"}))
+                                routes::json_response(
+                                    400,
+                                    &serde_json::json!({"error": "missing ids"}),
+                                )
                             } else {
-                                workflows::handle_get_workflow_step_logs(&ctx, wf_id, step_id, &request)
+                                workflows::handle_get_workflow_step_logs(
+                                    &ctx, wf_id, step_id, &request,
+                                )
                             }
                         } else {
-                            routes::json_response(400, &serde_json::json!({"error": "invalid path"}))
+                            routes::json_response(
+                                400,
+                                &serde_json::json!({"error": "invalid path"}),
+                            )
                         }
                     }
                 }
@@ -653,7 +685,10 @@ fn main() {
                     } else {
                         let wf_id = &p["/workflows/".len()..];
                         if wf_id.is_empty() {
-                            routes::json_response(400, &serde_json::json!({"error": "missing workflow id"}))
+                            routes::json_response(
+                                400,
+                                &serde_json::json!({"error": "missing workflow id"}),
+                            )
                         } else {
                             workflows::handle_get_workflow(&ctx, wf_id)
                         }

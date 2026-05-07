@@ -97,7 +97,8 @@ impl RuleEngine {
                     event_id: event.id.clone(),
                     action: Action::Ask,
                     rule_id: Some("D999".to_string()),
-                    note: "[aspect-paranoid] unclassified operation requires confirmation".to_string(),
+                    note: "[aspect-paranoid] unclassified operation requires confirmation"
+                        .to_string(),
                 };
             }
             return Decision {
@@ -152,7 +153,10 @@ impl RuleEngine {
             .join("; ");
 
         let observer_note = if primary.default_action != Action::Allow {
-            format!("[aspect-observer] would be {}: {}", primary.default_action, note)
+            format!(
+                "[aspect-observer] would be {}: {}",
+                primary.default_action, note
+            )
         } else {
             note
         };

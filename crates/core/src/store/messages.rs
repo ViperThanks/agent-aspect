@@ -38,20 +38,20 @@ impl AuditStore {
     pub fn sync_messages_and_state_txn(
         &self,
         messages: &[(
-            String,    // 0  id
-            String,    // 1  conversation_id
-            i64,       // 2  seq
-            String,    // 3  role
+            String,         // 0  id
+            String,         // 1  conversation_id
+            i64,            // 2  seq
+            String,         // 3  role
             Option<String>, // 4  timestamp
-            String,    // 5  text
-            String,    // 6  source
+            String,         // 5  text
+            String,         // 6  source
             Option<String>, // 7  turn_id
             Option<String>, // 8  tool_name
             Option<String>, // 9  tool_input_preview
             Option<String>, // 10 tool_input_full
             Option<String>, // 11 thinking
-            String,    // 12 raw_hash
-            String,    // 13 created_at
+            String,         // 12 raw_hash
+            String,         // 13 created_at
         )],
         state: &SyncStateRow,
     ) -> CheckpointResult<(usize, i64)> {

@@ -38,7 +38,11 @@ pub struct WorkflowRunner {
 }
 
 impl WorkflowRunner {
-    pub fn new(db_path: PathBuf, broadcaster: SharedBroadcaster, job_runner: Arc<JobRunner>) -> Self {
+    pub fn new(
+        db_path: PathBuf,
+        broadcaster: SharedBroadcaster,
+        job_runner: Arc<JobRunner>,
+    ) -> Self {
         Self {
             running: Arc::new(Mutex::new(None)),
             db_path,
@@ -48,10 +52,7 @@ impl WorkflowRunner {
     }
 
     /// 启动工作流执行。在后台线程中串行执行所有 steps。
-    pub fn start_workflow(
-        &self,
-        workflow_id: &str,
-    ) -> Result<(), String> {
+    pub fn start_workflow(&self, workflow_id: &str) -> Result<(), String> {
         {
             let guard = self.running.lock().unwrap();
             if guard.is_some() {
@@ -59,20 +60,25 @@ impl WorkflowRunner {
             }
         }
 
-        let store = AuditStore::open(&self.db_path)
-            .map_err(|e| format!("open db: {e}"))?;
+        let store = AuditStore::open(&self.db_path).map_err(|e| format!("open db: {e}"))?;
 
         // 验证 workflow 存在且状态为 draft / failed / cancelled / paused（允许重试和恢复）
-        let wf = store.get_workflow(workflow_id)
+        let wf = store
+            .get_workflow(workflow_id)
             .map_err(|e| format!("query workflow: {e}"))?
             .ok_or("workflow not found")?;
 
-        if wf.status != "draft" && wf.status != "failed" && wf.status != "cancelled" && wf.status != "paused" {
+        if wf.status != "draft"
+            && wf.status != "failed"
+            && wf.status != "cancelled"
+            && wf.status != "paused"
+        {
             return Err(format!("workflow status '{}' cannot be started", wf.status));
         }
 
         // 验证至少有一个 step
-        let steps = store.get_workflow_steps(workflow_id)
+        let steps = store
+            .get_workflow_steps(workflow_id)
             .map_err(|e| format!("query steps: {e}"))?;
         if steps.is_empty() {
             return Err("workflow has no steps".to_string());
@@ -86,7 +92,8 @@ impl WorkflowRunner {
         }
 
         let now = chrono::Utc::now().to_rfc3339();
-        store.update_workflow_status(workflow_id, "running", &now)
+        store
+            .update_workflow_status(workflow_id, "running", &now)
             .map_err(|e| format!("update workflow status: {e}"))?;
 
         let cancel_flag = Arc::new(AtomicBool::new(false));
@@ -97,10 +104,13 @@ impl WorkflowRunner {
         *self.running.lock().unwrap() = Some(running);
 
         // 广播 workflow 状态变更
-        self.broadcaster.lock().unwrap().broadcast(crate::sse::SseEvent {
-            event_type: "workflow_status".to_string(),
-            data: workflow_id.to_string(),
-        });
+        self.broadcaster
+            .lock()
+            .unwrap()
+            .broadcast(crate::sse::SseEvent {
+                event_type: "workflow_status".to_string(),
+                data: workflow_id.to_string(),
+            });
 
         // 启动后台执行线程
         let wf_id = workflow_id.to_string();
@@ -136,19 +146,21 @@ impl WorkflowRunner {
         }
 
         // 不在运行器中（可能已完成或未启动），直接更新 DB 状态
-        let store = AuditStore::open(&self.db_path)
-            .map_err(|e| format!("open db: {e}"))?;
-        let wf = store.get_workflow(workflow_id)
+        let store = AuditStore::open(&self.db_path).map_err(|e| format!("open db: {e}"))?;
+        let wf = store
+            .get_workflow(workflow_id)
             .map_err(|e| format!("query workflow: {e}"))?
             .ok_or("workflow not found")?;
 
         if wf.status == "running" || wf.status == "draft" {
             let now = chrono::Utc::now().to_rfc3339();
-            store.update_workflow_status(workflow_id, "cancelled", &now)
+            store
+                .update_workflow_status(workflow_id, "cancelled", &now)
                 .map_err(|e| format!("update status: {e}"))?;
 
             // 取消所有未完成步骤，并尝试 cancel 关联的 running job
-            let steps = store.get_workflow_steps(workflow_id)
+            let steps = store
+                .get_workflow_steps(workflow_id)
                 .map_err(|e| format!("query steps: {e}"))?;
             for step in &steps {
                 if step.status == "pending" || step.status == "running" {
@@ -172,7 +184,11 @@ impl WorkflowRunner {
     }
 
     pub fn running_workflow_id(&self) -> Option<String> {
-        self.running.lock().unwrap().as_ref().map(|r| r.workflow_id.clone())
+        self.running
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|r| r.workflow_id.clone())
     }
 }
 
@@ -242,11 +258,13 @@ fn execute_workflow_inner(
     cancel_flag: &Arc<AtomicBool>,
 ) -> Result<(), ExecuteError> {
     let store = AuditStore::open(db_path).map_err(|e| ExecuteError::Db(e.to_string()))?;
-    let steps = store.get_workflow_steps(workflow_id)
+    let steps = store
+        .get_workflow_steps(workflow_id)
         .map_err(|e| ExecuteError::Db(e.to_string()))?;
 
     // 读取 advance_mode（manual 模式下 step 完成后需要暂停等待信号）
-    let advance_mode = store.get_workflow(workflow_id)
+    let advance_mode = store
+        .get_workflow(workflow_id)
         .map_err(|e| ExecuteError::Db(e.to_string()))?
         .map(|wf| wf.advance_mode)
         .unwrap_or_else(|| "auto".to_string());
@@ -265,9 +283,7 @@ fn execute_workflow_inner(
         // 跳过已完成的步骤（重试场景）
         if step.status == "succeeded" {
             if let Some(ref job_id) = step.job_id {
-                let logs = read_job_logs_for_context(
-                    &store, job_id, &step.context_strategy,
-                );
+                let logs = read_job_logs_for_context(&store, job_id, &step.context_strategy);
                 // 同时存入 step_logs 供后续 step 的 context_from_step 使用
                 step_logs.insert(step.step_order, logs.clone());
                 previous_logs = Some(logs);
@@ -283,7 +299,8 @@ fn execute_workflow_inner(
         let prompt = build_step_prompt(step, context_logs);
 
         // 更新步骤状态为 running
-        store.update_workflow_step_status(&step.id, "running", None)
+        store
+            .update_workflow_step_status(&step.id, "running", None)
             .map_err(|e| ExecuteError::Db(e.to_string()))?;
 
         broadcaster.lock().unwrap().broadcast(crate::sse::SseEvent {
@@ -293,7 +310,8 @@ fn execute_workflow_inner(
                 "step_id": step.id,
                 "step_order": step.step_order,
                 "status": "running"
-            }).to_string(),
+            })
+            .to_string(),
         });
 
         // 通过 JobRunner 提交并同步等待完成
@@ -312,18 +330,25 @@ fn execute_workflow_inner(
         match job_result {
             Ok(job_id) => {
                 // 绑定 job_id 到步骤
-                let store = AuditStore::open(db_path).map_err(|e| ExecuteError::Db(e.to_string()))?;
+                let store =
+                    AuditStore::open(db_path).map_err(|e| ExecuteError::Db(e.to_string()))?;
                 let _ = store.update_workflow_step_job(&step.id, &job_id);
 
                 // 读取 job 实际结果（completion signal 在 DB 写入后发送，此时状态已 finalized）
-                let job = store.get_job(&job_id)
+                let job = store
+                    .get_job(&job_id)
                     .map_err(|e| ExecuteError::Db(e.to_string()))?;
                 let job_status = job.as_ref().map(|j| j.status.as_str()).unwrap_or("failed");
                 let failure_reason = job.as_ref().and_then(|j| j.failure_reason.clone());
 
                 let now = chrono::Utc::now().to_rfc3339();
-                let step_status = if job_status == "succeeded" { "succeeded" } else { "failed" };
-                store.update_workflow_step_status(&step.id, step_status, Some(&now))
+                let step_status = if job_status == "succeeded" {
+                    "succeeded"
+                } else {
+                    "failed"
+                };
+                store
+                    .update_workflow_step_status(&step.id, step_status, Some(&now))
                     .map_err(|e| ExecuteError::Db(e.to_string()))?;
 
                 if step_status == "failed" {
@@ -332,9 +357,7 @@ fn execute_workflow_inner(
                 }
 
                 // 读取日志作为下一步上下文，同时存入 step_logs
-                let logs = read_job_logs_for_context(
-                    &store, &job_id, &step.context_strategy,
-                );
+                let logs = read_job_logs_for_context(&store, &job_id, &step.context_strategy);
                 step_logs.insert(step.step_order, logs.clone());
                 previous_logs = Some(logs);
 
@@ -345,17 +368,19 @@ fn execute_workflow_inner(
                         "step_id": step.id,
                         "step_order": step.step_order,
                         "status": "succeeded"
-                    }).to_string(),
+                    })
+                    .to_string(),
                 });
 
                 // manual 模式：如果还有未完成的步骤，暂停等待推进信号
                 if advance_mode == "manual" {
-                    let has_pending = steps.iter().any(|s| {
-                        s.step_order > step.step_order && s.status != "succeeded"
-                    });
+                    let has_pending = steps
+                        .iter()
+                        .any(|s| s.step_order > step.step_order && s.status != "succeeded");
                     if has_pending {
                         let now = chrono::Utc::now().to_rfc3339();
-                        store.update_workflow_status(workflow_id, "paused", &now)
+                        store
+                            .update_workflow_status(workflow_id, "paused", &now)
                             .map_err(|e| ExecuteError::Db(e.to_string()))?;
                         broadcaster.lock().unwrap().broadcast(crate::sse::SseEvent {
                             event_type: "workflow_status".to_string(),
@@ -379,7 +404,8 @@ fn execute_workflow_inner(
 
                         // 恢复 running
                         let now = chrono::Utc::now().to_rfc3339();
-                        store.update_workflow_status(workflow_id, "running", &now)
+                        store
+                            .update_workflow_status(workflow_id, "running", &now)
                             .map_err(|e| ExecuteError::Db(e.to_string()))?;
                         broadcaster.lock().unwrap().broadcast(crate::sse::SseEvent {
                             event_type: "workflow_status".to_string(),
@@ -390,7 +416,8 @@ fn execute_workflow_inner(
             }
             Err(e) => {
                 let now = chrono::Utc::now().to_rfc3339();
-                let store = AuditStore::open(db_path).map_err(|e| ExecuteError::Db(e.to_string()))?;
+                let store =
+                    AuditStore::open(db_path).map_err(|e| ExecuteError::Db(e.to_string()))?;
                 let _ = store.update_workflow_step_status(&step.id, "failed", Some(&now));
                 return Err(ExecuteError::JobFailed(e));
             }
@@ -401,11 +428,7 @@ fn execute_workflow_inner(
 }
 
 /// 读取 job 日志并按 context_strategy 截断。
-fn read_job_logs_for_context(
-    store: &AuditStore,
-    job_id: &str,
-    strategy: &str,
-) -> String {
+fn read_job_logs_for_context(store: &AuditStore, job_id: &str, strategy: &str) -> String {
     if strategy == "none" {
         return String::new();
     }
@@ -469,10 +492,18 @@ pub fn handle_post_workflows(
         Some(n) if !n.is_empty() => n,
         _ => return json_response(400, &serde_json::json!({"error": "name is required"})),
     };
-    let description = body.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    let description = body
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let steps = match body.get("steps").and_then(|v| v.as_array()) {
         Some(s) => s,
-        _ => return json_response(400, &serde_json::json!({"error": "steps array is required"})),
+        _ => {
+            return json_response(
+                400,
+                &serde_json::json!({"error": "steps array is required"}),
+            );
+        }
     };
 
     if steps.is_empty() {
@@ -482,17 +513,29 @@ pub fn handle_post_workflows(
     // 先校验所有 steps，再插入 DB，避免校验失败留下孤儿 workflow 记录
     let valid_strategies = ["none", "last_50_lines", "last_100_lines", "full_log"];
     for (i, step_val) in steps.iter().enumerate() {
-        let prompt = step_val.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+        let prompt = step_val
+            .get("prompt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         if prompt.trim().is_empty() {
-            return json_response(400, &serde_json::json!({
-                "error": format!("step {} prompt cannot be empty", i)
-            }));
+            return json_response(
+                400,
+                &serde_json::json!({
+                    "error": format!("step {} prompt cannot be empty", i)
+                }),
+            );
         }
-        let context_strategy = step_val.get("context_strategy").and_then(|v| v.as_str()).unwrap_or("none");
+        let context_strategy = step_val
+            .get("context_strategy")
+            .and_then(|v| v.as_str())
+            .unwrap_or("none");
         if !valid_strategies.contains(&context_strategy) {
-            return json_response(400, &serde_json::json!({
-                "error": format!("step {} invalid context_strategy '{}', allowed: {:?}", i, context_strategy, valid_strategies)
-            }));
+            return json_response(
+                400,
+                &serde_json::json!({
+                    "error": format!("step {} invalid context_strategy '{}', allowed: {:?}", i, context_strategy, valid_strategies)
+                }),
+            );
         }
     }
 
@@ -506,22 +549,42 @@ pub fn handle_post_workflows(
 
     for (i, step_val) in steps.iter().enumerate() {
         let step_id = uuid::Uuid::now_v7().to_string();
-        let kind = step_val.get("kind").and_then(|v| v.as_str()).unwrap_or("agent_prompt");
+        let kind = step_val
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .unwrap_or("agent_prompt");
         let provider = step_val.get("provider").and_then(|v| v.as_str());
         let project_path = step_val.get("project_path").and_then(|v| v.as_str());
-        let prompt = step_val.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
-        let context_strategy = step_val.get("context_strategy").and_then(|v| v.as_str()).unwrap_or("none");
+        let prompt = step_val
+            .get("prompt")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let context_strategy = step_val
+            .get("context_strategy")
+            .and_then(|v| v.as_str())
+            .unwrap_or("none");
         let context_from_step = step_val.get("context_from_step").and_then(|v| v.as_i64());
 
         if let Err(e) = store.insert_workflow_step(
-            &step_id, &wf_id, i as i64, kind, provider, project_path,
-            prompt, context_strategy, context_from_step, &now,
+            &step_id,
+            &wf_id,
+            i as i64,
+            kind,
+            provider,
+            project_path,
+            prompt,
+            context_strategy,
+            context_from_step,
+            &now,
         ) {
             return json_response(500, &serde_json::json!({"error": e.to_string()}));
         }
     }
 
-    json_response(201, &serde_json::json!({"id": wf_id, "status": "draft", "advance_mode": "auto"}))
+    json_response(
+        201,
+        &serde_json::json!({"id": wf_id, "status": "draft", "advance_mode": "auto"}),
+    )
 }
 
 /// GET /workflows — 列出所有工作流。
@@ -545,31 +608,39 @@ pub fn handle_get_workflows(
         Err(e) => return json_response(500, &serde_json::json!({"error": e.to_string()})),
     };
 
-    let items: Vec<serde_json::Value> = workflows.iter().map(|wf| {
-        let (total, succeeded, failed, pending, _skipped) = store.workflow_step_counts(&wf.id).unwrap_or((0, 0, 0, 0, 0));
-        serde_json::json!({
-            "id": wf.id,
-            "name": wf.name,
-            "description": wf.description,
-            "status": wf.status,
-            "advance_mode": wf.advance_mode,
-            "created_at": wf.created_at,
-            "updated_at": wf.updated_at,
-            "step_counts": {
-                "total": total,
-                "succeeded": succeeded,
-                "failed": failed,
-                "pending": pending,
-            }
+    let items: Vec<serde_json::Value> = workflows
+        .iter()
+        .map(|wf| {
+            let (total, succeeded, failed, pending, _skipped) = store
+                .workflow_step_counts(&wf.id)
+                .unwrap_or((0, 0, 0, 0, 0));
+            serde_json::json!({
+                "id": wf.id,
+                "name": wf.name,
+                "description": wf.description,
+                "status": wf.status,
+                "advance_mode": wf.advance_mode,
+                "created_at": wf.created_at,
+                "updated_at": wf.updated_at,
+                "step_counts": {
+                    "total": total,
+                    "succeeded": succeeded,
+                    "failed": failed,
+                    "pending": pending,
+                }
+            })
         })
-    }).collect();
+        .collect();
 
-    json_response(200, &serde_json::json!({
-        "workflows": items,
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-    }))
+    json_response(
+        200,
+        &serde_json::json!({
+            "workflows": items,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }),
+    )
 }
 
 /// GET /workflows/:id — 获取工作流详情（含所有 steps）。
@@ -589,41 +660,49 @@ pub fn handle_get_workflow(
         Err(e) => return json_response(500, &serde_json::json!({"error": e.to_string()})),
     };
 
-    let step_values: Vec<serde_json::Value> = steps.iter().map(|s| {
-        serde_json::json!({
-            "id": s.id,
-            "step_order": s.step_order,
-            "kind": s.kind,
-            "provider": s.provider,
-            "project_path": s.project_path,
-            "prompt": s.prompt,
-            "context_strategy": s.context_strategy,
-            "context_from_step": s.context_from_step,
-            "status": s.status,
-            "job_id": s.job_id,
-            "created_at": s.created_at,
-            "finished_at": s.finished_at,
+    let step_values: Vec<serde_json::Value> = steps
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "id": s.id,
+                "step_order": s.step_order,
+                "kind": s.kind,
+                "provider": s.provider,
+                "project_path": s.project_path,
+                "prompt": s.prompt,
+                "context_strategy": s.context_strategy,
+                "context_from_step": s.context_from_step,
+                "status": s.status,
+                "job_id": s.job_id,
+                "created_at": s.created_at,
+                "finished_at": s.finished_at,
+            })
         })
-    }).collect();
+        .collect();
 
-    let (total, succeeded, failed, pending, _skipped) = store.workflow_step_counts(workflow_id).unwrap_or((0, 0, 0, 0, 0));
+    let (total, succeeded, failed, pending, _skipped) = store
+        .workflow_step_counts(workflow_id)
+        .unwrap_or((0, 0, 0, 0, 0));
 
-    json_response(200, &serde_json::json!({
-        "id": wf.id,
-        "name": wf.name,
-        "description": wf.description,
-        "status": wf.status,
-        "advance_mode": wf.advance_mode,
-        "created_at": wf.created_at,
-        "updated_at": wf.updated_at,
-        "steps": step_values,
-        "step_counts": {
-            "total": total,
-            "succeeded": succeeded,
-            "failed": failed,
-            "pending": pending,
-        }
-    }))
+    json_response(
+        200,
+        &serde_json::json!({
+            "id": wf.id,
+            "name": wf.name,
+            "description": wf.description,
+            "status": wf.status,
+            "advance_mode": wf.advance_mode,
+            "created_at": wf.created_at,
+            "updated_at": wf.updated_at,
+            "steps": step_values,
+            "step_counts": {
+                "total": total,
+                "succeeded": succeeded,
+                "failed": failed,
+                "pending": pending,
+            }
+        }),
+    )
 }
 
 /// PUT /workflows/:id — 更新工作流名称和描述。
@@ -638,7 +717,10 @@ pub fn handle_put_workflow(
     };
 
     let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("");
-    let description = body.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    let description = body
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     let store = ctx.store.lock().unwrap();
     let now = chrono::Utc::now().to_rfc3339();
@@ -651,16 +733,26 @@ pub fn handle_put_workflow(
     };
 
     if wf.status == "running" {
-        return json_response(400, &serde_json::json!({"error": "cannot edit running workflow"}));
+        return json_response(
+            400,
+            &serde_json::json!({"error": "cannot edit running workflow"}),
+        );
     }
 
     let final_name = if name.is_empty() { &wf.name } else { name };
-    let final_desc = if description.is_empty() && body.get("description").is_none() { &wf.description } else { description };
+    let final_desc = if description.is_empty() && body.get("description").is_none() {
+        &wf.description
+    } else {
+        description
+    };
 
     let advance_mode = body.get("advance_mode").and_then(|v| v.as_str());
 
     match store.update_workflow(workflow_id, final_name, final_desc, &now) {
-        Ok(0) => json_response(400, &serde_json::json!({"error": "cannot edit workflow in current state"})),
+        Ok(0) => json_response(
+            400,
+            &serde_json::json!({"error": "cannot edit workflow in current state"}),
+        ),
         Ok(_) => {
             // 如果传了 advance_mode，单独更新
             if let Some(mode) = advance_mode {
@@ -668,7 +760,10 @@ pub fn handle_put_workflow(
                     let _ = store.update_workflow_advance_mode(workflow_id, mode, &now);
                 }
             }
-            json_response(200, &serde_json::json!({"id": workflow_id, "status": "updated"}))
+            json_response(
+                200,
+                &serde_json::json!({"id": workflow_id, "status": "updated"}),
+            )
         }
         Err(e) => json_response(500, &serde_json::json!({"error": e.to_string()})),
     }
@@ -681,9 +776,15 @@ pub fn handle_delete_workflow(
 ) -> tiny_http::ResponseBox {
     let store = ctx.store.lock().unwrap();
     match store.delete_workflow(workflow_id) {
-        Ok(true) => json_response(200, &serde_json::json!({"id": workflow_id, "status": "deleted"})),
+        Ok(true) => json_response(
+            200,
+            &serde_json::json!({"id": workflow_id, "status": "deleted"}),
+        ),
         Ok(false) => json_response(404, &serde_json::json!({"error": "workflow not found"})),
-        Err(CheckpointError::WorkflowNotRunning) => json_response(400, &serde_json::json!({"error": "cannot delete running workflow"})),
+        Err(CheckpointError::WorkflowNotRunning) => json_response(
+            400,
+            &serde_json::json!({"error": "cannot delete running workflow"}),
+        ),
         Err(e) => json_response(500, &serde_json::json!({"error": e.to_string()})),
     }
 }
@@ -714,7 +815,10 @@ pub fn handle_put_workflow_steps_reorder(
     };
 
     if wf.status == "running" {
-        return json_response(400, &serde_json::json!({"error": "cannot reorder running workflow"}));
+        return json_response(
+            400,
+            &serde_json::json!({"error": "cannot reorder running workflow"}),
+        );
     }
 
     // 获取现有步骤，验证 step ID 归属
@@ -722,18 +826,28 @@ pub fn handle_put_workflow_steps_reorder(
         Ok(s) => s,
         Err(e) => return json_response(500, &serde_json::json!({"error": e.to_string()})),
     };
-    let existing_ids: std::collections::HashSet<&str> = existing_steps.iter().map(|s| s.id.as_str()).collect();
+    let existing_ids: std::collections::HashSet<&str> =
+        existing_steps.iter().map(|s| s.id.as_str()).collect();
 
     // 解析 step_orders: [{"id": "...", "step_order": 0}, ...]
     let mut step_orders = Vec::new();
     for (i, s) in steps.iter().enumerate() {
         let step_id = s.get("id").and_then(|v| v.as_str()).unwrap_or("");
-        let order = s.get("step_order").and_then(|v| v.as_i64()).unwrap_or(i as i64);
+        let order = s
+            .get("step_order")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(i as i64);
         if step_id.is_empty() {
-            return json_response(400, &serde_json::json!({"error": format!("step {i} missing id")}));
+            return json_response(
+                400,
+                &serde_json::json!({"error": format!("step {i} missing id")}),
+            );
         }
         if !existing_ids.contains(step_id) {
-            return json_response(400, &serde_json::json!({"error": format!("step {step_id} not found in workflow")}));
+            return json_response(
+                400,
+                &serde_json::json!({"error": format!("step {step_id} not found in workflow")}),
+            );
         }
         step_orders.push((step_id.to_string(), order));
     }
@@ -776,9 +890,12 @@ pub fn handle_post_workflow_next_step(
     };
 
     if wf.status != "paused" && wf.status != "running" {
-        return json_response(400, &serde_json::json!({
-            "error": format!("workflow status '{}' cannot advance", wf.status)
-        }));
+        return json_response(
+            400,
+            &serde_json::json!({
+                "error": format!("workflow status '{}' cannot advance", wf.status)
+            }),
+        );
     }
 
     let now = chrono::Utc::now().to_rfc3339();
@@ -795,7 +912,10 @@ pub fn handle_post_workflow_cancel(
 ) -> tiny_http::ResponseBox {
     match workflow_runner.cancel_workflow(workflow_id) {
         Ok(true) => json_response(200, &serde_json::json!({"status": "cancelled"})),
-        Ok(false) => json_response(400, &serde_json::json!({"error": "workflow not in cancellable state"})),
+        Ok(false) => json_response(
+            400,
+            &serde_json::json!({"error": "workflow not in cancellable state"}),
+        ),
         Err(e) => json_response(500, &serde_json::json!({"error": e})),
     }
 }
@@ -821,25 +941,40 @@ pub fn handle_get_workflow_step_logs(
     // 验证 step 属于该 workflow
     let step = match store.get_workflow_step(step_id) {
         Ok(Some(s)) if s.workflow_id == workflow_id => s,
-        Ok(Some(_)) => return json_response(400, &serde_json::json!({"error": "step does not belong to this workflow"})),
+        Ok(Some(_)) => {
+            return json_response(
+                400,
+                &serde_json::json!({"error": "step does not belong to this workflow"}),
+            );
+        }
         Ok(None) => return json_response(404, &serde_json::json!({"error": "step not found"})),
         Err(e) => return json_response(500, &serde_json::json!({"error": e.to_string()})),
     };
 
     let job_id = match &step.job_id {
         Some(id) => id.clone(),
-        None => return json_response(200, &serde_json::json!({
-            "step_id": step_id,
-            "status": step.status,
-            "logs": [],
-            "total": 0,
-        })),
+        None => {
+            return json_response(
+                200,
+                &serde_json::json!({
+                    "step_id": step_id,
+                    "status": step.status,
+                    "logs": [],
+                    "total": 0,
+                }),
+            );
+        }
     };
 
     // 读取 job logs
     let all_logs = match store.get_job_logs(&job_id) {
         Ok(logs) => logs,
-        Err(e) => return json_response(500, &serde_json::json!({"error": format!("query job logs: {e}")})),
+        Err(e) => {
+            return json_response(
+                500,
+                &serde_json::json!({"error": format!("query job logs: {e}")}),
+            );
+        }
     };
 
     let total = all_logs.len();
@@ -847,20 +982,25 @@ pub fn handle_get_workflow_step_logs(
         .into_iter()
         .skip(offset)
         .take(limit)
-        .map(|l| serde_json::json!({
-            "stream": l.stream,
-            "chunk": l.chunk,
-            "timestamp": l.timestamp,
-        }))
+        .map(|l| {
+            serde_json::json!({
+                "stream": l.stream,
+                "chunk": l.chunk,
+                "timestamp": l.timestamp,
+            })
+        })
         .collect();
 
-    json_response(200, &serde_json::json!({
-        "step_id": step_id,
-        "job_id": job_id,
-        "status": step.status,
-        "logs": logs,
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-    }))
+    json_response(
+        200,
+        &serde_json::json!({
+            "step_id": step_id,
+            "job_id": job_id,
+            "status": step.status,
+            "logs": logs,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }),
+    )
 }
