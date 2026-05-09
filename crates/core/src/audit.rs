@@ -15,6 +15,7 @@ use rusqlite::Connection;
 use std::path::Path;
 
 // Re-export row types so external code can keep using `use agent_aspect_core::audit::*`.
+pub use crate::store::completion::CompletionObserverRow;
 pub use crate::store::conversations::{
     ConversationInfo, ConversationRow, ProjectContext, RunContext,
 };
@@ -233,6 +234,7 @@ impl AuditStore {
         self.migrate_v16_job_workflow_id()?;
         self.migrate_v17_workflow_advance_mode()?;
         self.migrate_v18_message_thinking()?;
+        self.migrate_v19_completion_observers()?;
         self.conn
             .execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_conv_agent ON events(conversation_id, agent)",
@@ -613,6 +615,53 @@ impl AuditStore {
                 )
                 .map_err(AgentAspectError::MigrateConversationSchema)?;
         }
+        Ok(())
+    }
+
+    /// v19: 新增 completion_observers 表 — transcript scanner 观察者持久化。
+    ///
+    /// 每个 observer 记录一个 scanner 的 cursor 位置、deadline、完成信号等。
+    /// scanner 主循环每次 tick 读取 active observers，增量扫描 transcript，
+    /// 更新 cursor 或标记终态。
+    fn migrate_v19_completion_observers(&self) -> AgentAspectResult<()> {
+        self.conn
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS completion_observers (
+                    id TEXT PRIMARY KEY,
+                    job_id TEXT,
+                    workflow_id TEXT,
+                    workflow_step_id TEXT,
+                    conversation_id TEXT,
+                    agent TEXT NOT NULL,
+                    transcript_path TEXT,
+                    file_fingerprint TEXT,
+                    cursor_byte_offset INTEGER NOT NULL DEFAULT 0,
+                    last_line_no INTEGER NOT NULL DEFAULT 0,
+                    last_line_hash TEXT,
+                    last_line_preview TEXT,
+                    last_observed_mtime TEXT,
+                    last_observed_size INTEGER,
+                    started_at TEXT NOT NULL,
+                    last_activity_at TEXT NOT NULL,
+                    idle_deadline_at TEXT NOT NULL,
+                    hard_deadline_at TEXT NOT NULL,
+                    attempt INTEGER NOT NULL DEFAULT 1,
+                    max_attempts INTEGER NOT NULL DEFAULT 1,
+                    status TEXT NOT NULL DEFAULT 'running',
+                    completion_signal TEXT,
+                    completion_authority TEXT,
+                    completion_reason TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_completion_observers_status
+                    ON completion_observers(status, hard_deadline_at);
+                CREATE INDEX IF NOT EXISTS idx_completion_observers_job
+                    ON completion_observers(job_id);
+                CREATE INDEX IF NOT EXISTS idx_completion_observers_conversation
+                    ON completion_observers(conversation_id, agent);",
+            )
+            .map_err(AgentAspectError::MigrateCompletionObserverSchema)?;
         Ok(())
     }
 

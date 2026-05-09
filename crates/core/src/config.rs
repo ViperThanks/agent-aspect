@@ -11,7 +11,28 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+/// Per-event 配置 — 控制单个 lifecycle event 的启停。
+///
+/// 用于 `AgentHookConfig::events` map 中，key 是 LifecycleEvent 名称（如 "PreToolUse"）。
+/// `#[serde(default)]` 保证老 config 缺少此字段时反序列化不出错。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EventConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+impl Default for EventConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
 /// Per-agent hook 控制配置 — 控制该 agent 的 hook 安装和各类事件评估开关。
+///
+/// 事件级别配置优先级：
+/// 1. `events` map 中显式配置的 `EventConfig::enabled`
+/// 2. 回退到旧版扁平布尔值（`pretooluse_enabled`/`metadata_enabled`/`stop_enabled`）
+/// 3. 默认 `true`
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentHookConfig {
     #[serde(default = "default_true")]
@@ -22,6 +43,9 @@ pub struct AgentHookConfig {
     pub metadata_enabled: bool,
     #[serde(default = "default_true")]
     pub stop_enabled: bool,
+    /// Per-event 启停配置。key 为 LifecycleEvent 名称（PascalCase），如 "PreToolUse"。
+    #[serde(default)]
+    pub events: HashMap<String, EventConfig>,
 }
 
 impl Default for AgentHookConfig {
@@ -31,6 +55,30 @@ impl Default for AgentHookConfig {
             pretooluse_enabled: true,
             metadata_enabled: true,
             stop_enabled: true,
+            events: HashMap::new(),
+        }
+    }
+}
+
+impl AgentHookConfig {
+    /// 判断指定 lifecycle event 是否在配置中启用。
+    ///
+    /// 优先查 `events` map；无条目时回退到旧版扁平布尔值映射：
+    /// - PreToolUse → pretooluse_enabled
+    /// - PostToolUse → metadata_enabled（旧语义：metadata 即 PostToolUse 审计）
+    /// - Stop → stop_enabled
+    /// - 其他事件默认 true
+    pub fn is_event_enabled(&self, event_name: &str) -> bool {
+        // 1. events map 优先
+        if let Some(ec) = self.events.get(event_name) {
+            return ec.enabled;
+        }
+        // 2. 回退到旧版扁平布尔值
+        match event_name {
+            "PreToolUse" | "PermissionRequest" => self.pretooluse_enabled,
+            "PostToolUse" => self.metadata_enabled,
+            "Stop" => self.stop_enabled,
+            _ => true,
         }
     }
 }

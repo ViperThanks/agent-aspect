@@ -37,6 +37,8 @@ const S = {
   beatInFlight: false,
   pendingRunPrefill: null, // { provider, projectPath } applied once in renderRun()
   prevTabBeforeDetail: 'convos',
+  hookHealth: 'loading', // loading | ok | needs_review | partial
+  hookStatus: null,
 };
 
 // Markdown rendering — 来自 shared_ui/render.js（renderMd）
@@ -253,12 +255,14 @@ async function loadHome() {
   renderHomeLoading();
   const online = await loadMacStatus();
   if (online) {
-    await Promise.allSettled([loadHealthStatus(), loadHomeOverview(), loadHomePending(), loadHomeLastJob()]);
+    await Promise.allSettled([loadHealthStatus(), loadHomeOverview(), loadHomePending(), loadHomeLastJob(), loadHookStatus()]);
   } else {
     S.health.status = 'offline';
     S.overview = { conversations: null, total: 0 };
     S.pending = { events: [], count: 0 };
     S.lastJob = null;
+    S.hookHealth = 'loading';
+    S.hookStatus = null;
     const dot = document.getElementById('status-dot');
     if (dot) dot.className = 'dot offline';
   }
@@ -266,7 +270,7 @@ async function loadHome() {
 }
 
 async function loadHomeDataOnly() {
-  await Promise.allSettled([loadHealthStatus(), loadHomeOverview(), loadHomePending(), loadHomeLastJob()]);
+  await Promise.allSettled([loadHealthStatus(), loadHomeOverview(), loadHomePending(), loadHomeLastJob(), loadHookStatus()]);
   if (S.tab === 'home') renderHome();
 }
 
@@ -288,6 +292,25 @@ async function loadHealthStatus() {
   } catch (e) {
     S.health.status = e.code === 'mac_offline' ? 'offline' : 'error';
     document.getElementById('status-dot').className = 'dot offline';
+  }
+}
+
+async function loadHookStatus() {
+  try {
+    var res = await api('/api/hook-status');
+    var data = await res.json();
+    S.hookStatus = data;
+    var agents = data.agents || [];
+    if (agents.some(function(a) { return a.legacy_present; })) {
+      S.hookHealth = 'needs_review';
+    } else if (agents.some(function(a) { return a.status !== 'ok' && a.status !== 'disabled'; })) {
+      S.hookHealth = 'partial';
+    } else {
+      S.hookHealth = 'ok';
+    }
+  } catch (e) {
+    S.hookHealth = 'loading';
+    S.hookStatus = null;
   }
 }
 
@@ -392,7 +415,23 @@ function renderHomeStatusCard() {
     '</div>' +
     '<div id="beat-info" class="status-row" style="margin-top:6px">' +
     '<span class="status-label">延迟 ' + rtt + '</span>' +
+    '</div>' +
+    renderHookHealthRow() +
     '</div></div>';
+}
+
+function renderHookHealthRow() {
+  if (S.health.status === 'offline' && S.beat.status !== 'online') return '';
+  var h = S.hookHealth;
+  if (h === 'loading') {
+    return '<div class="status-row" style="margin-top:6px"><span class="status-label">Hook 状态</span> <span class="status-value" style="color:#888">检测中...</span></div>';
+  }
+  var icon, text, color;
+  if (h === 'ok') { icon = '✅'; text = '正常'; color = '#22c55e'; }
+  else if (h === 'needs_review') { icon = '⚠️'; text = '需要关注'; color = '#eab308'; }
+  else if (h === 'partial') { icon = '❌'; text = '部分缺失'; color = '#ef4444'; }
+  else { icon = '—'; text = '未知'; color = '#888'; }
+  return '<div class="status-row" style="margin-top:6px"><span class="status-label">Hook 状态</span> <span class="status-value" style="color:' + color + '">' + icon + ' ' + text + '</span></div>';
 }
 
 function renderHomePendingCard() {
@@ -450,10 +489,41 @@ function renderHomeJobCard() {
   } else {
     const statusBadge = jobBadge(job.status);
     const prompt = job.prompt || job.kind || '';
+    var cr = job.completed_reason ? humanCompletedReason(job.completed_reason) : '';
     body = '<div class="status-row">' + statusBadge +
       '<span class="status-value">' + escHtml(trunc(prompt, 60)) + '</span></div>';
+    var detail = humanCompletionDetail(job.completion);
+    if ((cr || detail) && (job.status === 'succeeded' || job.status === 'failed' || job.status === 'cancelled' || job.status === 'timeout')) {
+      body += '<div style="font-size:11px;color:#888;margin-top:4px">' + escHtml([cr, detail].filter(Boolean).join(' · ')) + '</div>';
+    }
   }
   return '<div class="card"><div class="card-title">最近任务</div>' + body + '</div>';
+}
+
+function humanCompletedReason(reason) {
+  if (!reason) return '';
+  if (reason === 'stop_hook') return '已完成：stop hook';
+  if (reason === 'process_exit') return '已完成：进程退出';
+  if (reason === 'scanner_timeout' || reason === 'timeout_killed') return '超时';
+  if (reason === 'process_exit_nonzero') return '进程异常';
+  return reason;
+}
+
+function cleanCompletionName(value) {
+  if (!value) return '';
+  return String(value).replace(/^"|"$/g, '');
+}
+
+function humanCompletionDetail(completion) {
+  if (!completion) return '';
+  var parts = [];
+  var signal = cleanCompletionName(completion.signal);
+  var authority = cleanCompletionName(completion.authority);
+  if (signal) parts.push(signal);
+  if (authority) parts.push(authority);
+  if (completion.last_activity_at) parts.push('activity ' + relTime(completion.last_activity_at));
+  if (completion.hard_deadline_at) parts.push('deadline ' + relTime(completion.hard_deadline_at));
+  return parts.join(' · ');
 }
 
 // ============================================================
@@ -1174,7 +1244,10 @@ async function pollJobStatus() {
     const data = await res.json();
     S.activeJob.status = data.status;
     const badge = document.getElementById('run-status-badge');
-    if (badge) badge.innerHTML = jobBadge(data.status);
+    if (badge) {
+      var detail = humanCompletionDetail(data.completion);
+      badge.innerHTML = jobBadge(data.status) + (detail ? '<span style="font-size:11px;color:#888;margin-left:6px">' + escHtml(detail) + '</span>' : '');
+    }
     console.debug('[run] job status:', data.status);
     if (data.status === 'succeeded' || data.status === 'failed' || data.status === 'cancelled' || data.status === 'timeout') {
       const cancelBtn = document.getElementById('run-cancel-btn');
@@ -1247,11 +1320,14 @@ async function loadRunHistory() {
       '<div class="card-title">历史任务</div>' +
       jobs.map(j => {
         const prompt = j.prompt || j.kind || '';
+        const detail = humanCompletionDetail(j.completion);
         return '<div class="conv-item">' +
           '<div class="conv-header">' +
           '<span class="conv-title">' + escHtml(trunc(prompt, 50)) + '</span>' +
           jobBadge(j.status) +
-          '</div></div>';
+          '</div>' +
+          (detail ? '<div class="conv-meta">' + escHtml(detail) + '</div>' : '') +
+          '</div>';
       }).join('') + '</div>';
   } catch (e) {
     console.debug('[run] history error:', e.code);
@@ -1261,6 +1337,25 @@ async function loadRunHistory() {
 // ============================================================
 // Settings tab
 // ============================================================
+function renderSettingsHookStatus() {
+  var macOnline = S.beat.status === 'online' || S.health.status === 'online';
+  if (!macOnline || !S.hookStatus) return '';
+  var agents = S.hookStatus.agents || [];
+  if (agents.length === 0) return '';
+  var rows = agents.map(function(a) {
+    var icon, color;
+    if (a.status === 'ok') { icon = '✅'; color = '#22c55e'; }
+    else if (a.status === 'disabled') { icon = '⏸'; color = '#888'; }
+    else if (a.status === 'partial') { icon = '⚠️'; color = '#eab308'; }
+    else { icon = '❌'; color = '#ef4444'; }
+    return '<div class="setting-row"><span class="setting-label">' + escHtml(a.label || a.agent) + '</span><span class="setting-value" style="color:' + color + '">' + icon + ' ' + escHtml(a.status || '—') + '</span></div>';
+  }).join('');
+  return '<div class="card" style="margin-top:12px">' +
+    '<div class="card-title">Hook 状态</div>' +
+    rows +
+    '</div>';
+}
+
 function renderSettings() {
   const el = document.getElementById('page-settings');
   const token = S.token;
@@ -1280,6 +1375,7 @@ function renderSettings() {
     '<div class="setting-row"><span class="setting-label">版本</span><span class="setting-value">v__VERSION__</span></div>' +
     '<div class="setting-row"><span class="setting-label">构建时间</span><span class="setting-value">__BUILD_TIME__</span></div>' +
     '</div>' +
+    renderSettingsHookStatus() +
     '<div style="margin-top:12px"><button class="danger" onclick="logout()">退出登录</button></div>';
 }
 

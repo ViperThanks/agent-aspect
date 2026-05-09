@@ -17,6 +17,7 @@
 //!   无 → 新建会话。这里不做 provider 级别的静默丢弃
 
 use agent_aspect_core::audit::AuditStore;
+use agent_aspect_core::lifecycle::{CompletionOutcome, CompletionSignal, CompletionSignalKind};
 use agent_aspect_core::provider_registry::ProviderRegistry;
 use agent_aspect_core::provider_resolver::ProviderResolver;
 use agent_aspect_core::runtime_profile::{
@@ -32,6 +33,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
+use crate::completion::CompletionSink;
 use crate::routes::json_response;
 use crate::sse::{self, SharedBroadcaster};
 
@@ -124,10 +126,12 @@ pub struct JobRunner {
     broadcaster: SharedBroadcaster,
     resolver: ProviderResolver,
     registry: ProviderRegistry,
+    completion_sink: CompletionSink,
 }
 
 impl JobRunner {
     /// 创建 JobRunner。启动时自动恢复 stale active jobs 和未绑定的 provider conversations。
+    /// `shared_store` 来自 AppContext，CompletionSink 持有其 Arc 引用用于终态写入。
     pub fn new(
         db_path: PathBuf,
         timeout_secs: u64,
@@ -136,6 +140,7 @@ impl JobRunner {
         broadcaster: SharedBroadcaster,
         resolver: ProviderResolver,
         registry: ProviderRegistry,
+        shared_store: Arc<Mutex<AuditStore>>,
     ) -> Self {
         let runner_id = uuid::Uuid::now_v7().to_string();
         if let Ok(store) = AuditStore::open(&db_path) {
@@ -150,6 +155,8 @@ impl JobRunner {
         }
         bind_recent_unbound_provider_conversations(&db_path);
 
+        let completion_sink = CompletionSink::new(shared_store, broadcaster.clone());
+
         Self {
             running: Arc::new(Mutex::new(None)),
             db_path,
@@ -160,6 +167,7 @@ impl JobRunner {
             broadcaster,
             resolver,
             registry,
+            completion_sink,
         }
     }
 
@@ -442,6 +450,37 @@ impl JobRunner {
             }
         }
 
+        // Register completion observer for agent_prompt jobs
+        if kind == "agent_prompt" {
+            let agent_str = provider.unwrap_or("unknown");
+            let observer_id = uuid::Uuid::now_v7().to_string();
+            let timeout = if kind == "agent_prompt" {
+                self.agent_prompt_timeout_secs
+            } else {
+                self.timeout_secs
+            };
+            let idle_secs = ((timeout as f64) * 0.8).max(1.0) as i64;
+            let idle_deadline = chrono::Utc::now() + chrono::Duration::seconds(idle_secs);
+            let hard_deadline = chrono::Utc::now() + chrono::Duration::seconds(timeout as i64);
+            let _ = store.create_completion_observer(
+                &observer_id,
+                Some(&job_id),
+                None, // workflow_id
+                None, // workflow_step_id
+                conversation_id,
+                agent_str,
+                None, // transcript_path — scanner 会 fallback 到 project activity
+                None, // file_fingerprint
+                &now, // started_at
+                &now, // last_activity_at
+                &idle_deadline.to_rfc3339(),
+                &hard_deadline.to_rfc3339(),
+                1,    // max_attempts
+                &now, // created_at
+                &now, // updated_at
+            );
+        }
+
         // Audit
         let audit_note = format!("[aspect-job] submitted: {kind}");
         let event_id = uuid::Uuid::now_v7().to_string();
@@ -495,8 +534,8 @@ impl JobRunner {
         let max_output_bytes = self.max_output_bytes;
         let running = self.running.clone();
         let job_id_clone = job_id.clone();
-        let broadcaster = self.broadcaster.clone();
         let runner_id = self.runner_id.clone();
+        let sink = self.completion_sink.clone();
 
         std::thread::spawn(move || {
             exec_job(
@@ -506,7 +545,7 @@ impl JobRunner {
                 timeout_secs,
                 max_output_bytes,
                 &running,
-                &broadcaster,
+                &sink,
                 &runner_id,
                 None, // normal jobs don't use completion channel
             )
@@ -605,7 +644,37 @@ impl JobRunner {
             )
             .map_err(|e| format!("insert job: {e}"))?;
 
-        // 5a. 审计：workflow step job 提交
+        // 5a. Register completion observer for agent_prompt workflow steps
+        if step_kind == "agent_prompt" {
+            let observer_id = uuid::Uuid::now_v7().to_string();
+            let timeout = if step_kind == "agent_prompt" {
+                self.agent_prompt_timeout_secs
+            } else {
+                self.timeout_secs
+            };
+            let idle_secs = ((timeout as f64) * 0.8).max(1.0) as i64;
+            let idle_deadline = chrono::Utc::now() + chrono::Duration::seconds(idle_secs);
+            let hard_deadline = chrono::Utc::now() + chrono::Duration::seconds(timeout as i64);
+            let _ = store.create_completion_observer(
+                &observer_id,
+                Some(&job_id),
+                workflow_id,
+                None, // workflow_step_id — 绑定发生在 workflow 执行器中
+                conversation_id,
+                provider,
+                None, // transcript_path
+                None, // file_fingerprint
+                &now,
+                &now,
+                &idle_deadline.to_rfc3339(),
+                &hard_deadline.to_rfc3339(),
+                1,
+                &now,
+                &now,
+            );
+        }
+
+        // 5b. 审计：workflow step job 提交
         if let Some(wf_id) = workflow_id {
             let event_id = uuid::Uuid::now_v7().to_string();
             let tool_name = format!("[aspect-prompt-submit-from-workflow-{wf_id}]");
@@ -653,8 +722,8 @@ impl JobRunner {
         let max_output_bytes = self.max_output_bytes;
         let running = self.running.clone();
         let job_id_clone = job_id.clone();
-        let broadcaster = self.broadcaster.clone();
         let runner_id = self.runner_id.clone();
+        let sink = self.completion_sink.clone();
 
         std::thread::spawn(move || {
             exec_job(
@@ -664,7 +733,7 @@ impl JobRunner {
                 timeout_secs,
                 max_output_bytes,
                 &running,
-                &broadcaster,
+                &sink,
                 &runner_id,
                 Some(completion_tx),
             )
@@ -777,6 +846,33 @@ fn job_conversation_db_id(j: &agent_aspect_core::audit::JobRow) -> Option<String
             provider,
             conversation_id,
         ))
+    }
+}
+
+/// 查询 job 关联的 completion observer，并转换为 API 可直接返回的 JSON。
+///
+/// `completed_reason` 是稳定枚举；`completion` 负责暴露 scanner/stop/process
+/// 判定的观测细节，供 UI 展示 source、authority、deadline 和 last_activity。
+fn job_completion_json(runner: &JobRunner, job_id: &str) -> serde_json::Value {
+    let store = match AuditStore::open(&runner.db_path) {
+        Ok(store) => store,
+        Err(_) => return serde_json::Value::Null,
+    };
+    match store.get_observer_by_job_id(job_id) {
+        Ok(Some(observer)) => serde_json::json!({
+            "observer_id": observer.id,
+            "status": observer.status,
+            "signal": observer.completion_signal,
+            "authority": observer.completion_authority,
+            "reason": observer.completion_reason,
+            "last_activity_at": observer.last_activity_at,
+            "idle_deadline_at": observer.idle_deadline_at,
+            "hard_deadline_at": observer.hard_deadline_at,
+            "cursor_byte_offset": observer.cursor_byte_offset,
+            "last_line_no": observer.last_line_no,
+            "last_line_preview": observer.last_line_preview,
+        }),
+        _ => serde_json::Value::Null,
     }
 }
 
@@ -1095,7 +1191,7 @@ fn latest_project_activity(root: &Path) -> Option<SystemTime> {
 
 /// Job 执行主函数（在后台线程运行）。
 /// 流程：标记 started → spawn 子进程 → 并行读取 stdout/stderr → 等待完成/空闲超时
-/// → 清理 → 更新 DB 状态 → 绑定 provider conversation → SSE 广播完成。
+/// → 清理 → CompletionSink 写入终态 → 绑定 provider conversation → SSE 广播完成。
 fn exec_job(
     job_id: &str,
     db_path: &PathBuf,
@@ -1103,7 +1199,7 @@ fn exec_job(
     timeout_secs: u64,
     max_output_bytes: usize,
     running: &Arc<Mutex<Option<RunningJob>>>,
-    broadcaster: &SharedBroadcaster,
+    sink: &CompletionSink,
     runner_id: &str,
     mut completion_tx: Option<std::sync::mpsc::SyncSender<()>>,
 ) {
@@ -1179,6 +1275,7 @@ fn exec_job(
                  hint: Configure provider_binaries.<name> in ~/.agent-aspect/config.toml \
                  or ensure the binary directory is visible to agent-aspect-bridge"
             );
+            // spawn 失败不走 CompletionSink（job 还没真正开始），直接写 DB
             let _ = store.update_job_finished_with_completed_reason(
                 job_id,
                 "failed",
@@ -1188,16 +1285,7 @@ fn exec_job(
                 Some("process_exit_nonzero"),
             );
             let _ = store.insert_job_log(job_id, "system", &err_msg, 0, &now);
-            // Broadcast job_status on spawn failure
-            broadcaster.lock().unwrap().broadcast(sse::SseEvent {
-                event_type: "job_status".to_string(),
-                data: serde_json::json!({
-                    "job_id": job_id,
-                    "status": "failed",
-                    "failure_reason": "spawn failed",
-                })
-                .to_string(),
-            });
+            sink.broadcast_spawn_failed(job_id);
             let _ = completion_tx.take().map(|tx| tx.send(()));
             return;
         }
@@ -1231,6 +1319,7 @@ fn exec_job(
     }
 
     let cancel_flag = Arc::new(AtomicBool::new(false));
+    let broadcaster = sink.broadcaster();
     let log_writer = Arc::new(Mutex::new(LogWriter {
         db_path: db_path.clone(),
         job_id: job_id.to_string(),
@@ -1299,6 +1388,18 @@ fn exec_job(
                 exit_status = Some(status);
                 if observing {
                     termination_source = "process_exit_during_observe";
+                }
+                // Stop hook 与进程退出可能只差几十毫秒。退出时做一次短暂确认，
+                // 避免已收到 stop marker 的正常完成被误记为 process_exit。
+                for _ in 0..10 {
+                    if let Ok(Some(job_row)) = store.get_job(job_id) {
+                        if job_row.stop_requested_at.is_some() {
+                            stop_requested = true;
+                            termination_source = "stop_requested";
+                            break;
+                        }
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
                 }
                 break;
             }
@@ -1425,68 +1526,66 @@ fn exec_job(
         guard.take().and_then(|rj| rj.completion_tx)
     };
 
-    // Check if cancel already wrote a terminal state — status guard prevents overwrite
+    // Write terminal state via CompletionSink
     let now = chrono::Utc::now().to_rfc3339();
-    if timed_out {
-        let _ = store.update_job_finished_with_completed_reason(
-            job_id,
-            "failed",
-            &now,
-            None,
-            Some(&format!(
+    let signal = if timed_out {
+        Some(CompletionSignal {
+            kind: CompletionSignalKind::ScannerTimeout,
+            authority: agent_aspect_core::lifecycle::CompletionAuthority::Authoritative,
+            outcome: CompletionOutcome::TimedOut,
+            agent: agent_aspect_core::event::AgentId::ClaudeCode,
+            job_id: Some(job_id.to_string()),
+            workflow_id: None,
+            workflow_step_id: None,
+            conversation_id: None,
+            reason: format!(
                 "idle timeout after {timeout_secs}s without output (source: {termination_source})"
-            )),
-            Some("timeout_killed"),
-        );
+            ),
+            observed_at: now.clone(),
+        })
     } else if stop_requested {
-        let _ = store.update_job_finished_with_completed_reason(
-            job_id,
-            "failed",
-            &now,
-            None,
-            Some("[aspect-stop] hook received"),
-            Some("stop_requested"),
-        );
-    } else if let Some(status) = exit_status {
-        let code = status.code();
-        let final_status = if status.success() {
-            "succeeded"
-        } else {
-            "failed"
-        };
-        let reason = if status.success() {
-            None
-        } else {
-            Some("process exited with non-zero status")
-        };
-        let completed_reason = if status.success() {
-            "process_exit"
-        } else {
-            "process_exit_nonzero"
-        };
-        let _ = store.update_job_finished_with_completed_reason(
-            job_id,
-            final_status,
-            &now,
-            code,
-            reason,
-            Some(completed_reason),
-        );
+        // stop hook → succeeded（agent 正常完成了输出）
+        Some(CompletionSignal {
+            kind: CompletionSignalKind::StopHook,
+            authority: agent_aspect_core::lifecycle::CompletionAuthority::Authoritative,
+            outcome: CompletionOutcome::Completed,
+            agent: agent_aspect_core::event::AgentId::ClaudeCode,
+            job_id: Some(job_id.to_string()),
+            workflow_id: None,
+            workflow_step_id: None,
+            conversation_id: None,
+            reason: "[aspect-stop] hook received".to_string(),
+            observed_at: now.clone(),
+        })
+    } else if let Some(ref status) = exit_status {
+        Some(crate::completion::signal_from_exit_status(
+            status, job_id, &now,
+        ))
     } else {
-        // Child exited without status (e.g. killed by cancel or signal)
-        let reason = if cancel_flag.load(Ordering::Relaxed) {
-            "cancelled"
-        } else {
-            "timeout_killed"
-        };
-        let _ = store.update_job_finished_with_completed_reason(
+        Some(crate::completion::signal_for_killed(
+            cancel_flag.load(Ordering::Relaxed),
             job_id,
-            "failed",
             &now,
-            None,
-            Some("process ended without exit status"),
-            Some(reason),
-        );
+        ))
+    };
+
+    if let Some(sig) = &signal {
+        if let Err(e) = sink.apply(sig) {
+            eprintln!("agent-aspect-bridge: job {job_id}: completion sink apply: {e}");
+            // Fallback: 直接写 DB（确保终态不丢失）
+            let _ = store.update_job_finished_with_completed_reason(
+                job_id,
+                match sig.outcome {
+                    CompletionOutcome::Completed => "succeeded",
+                    CompletionOutcome::Cancelled => "cancelled",
+                    _ => "failed",
+                },
+                &now,
+                None,
+                Some(&sig.reason),
+                Some(crate::completion::canonical_completed_reason(sig)),
+            );
+        }
     }
 
     bind_provider_conversation(job_id, db_path);
@@ -1498,12 +1597,14 @@ fn exec_job(
         .map(|j| j.status.clone())
         .unwrap_or_else(|| "failed".to_string());
     let final_reason = final_job.as_ref().and_then(|j| j.failure_reason.clone());
+    let final_completed_reason = final_job.as_ref().and_then(|j| j.completed_reason.clone());
     broadcaster.lock().unwrap().broadcast(sse::SseEvent {
         event_type: "job_status".to_string(),
         data: serde_json::json!({
             "job_id": job_id,
             "status": final_status,
             "failure_reason": final_reason,
+            "completed_reason": final_completed_reason,
         })
         .to_string(),
     });
@@ -2171,6 +2272,7 @@ pub fn handle_get_jobs(request: &tiny_http::Request, runner: &JobRunner) -> tiny
                         "last_log_at": j.last_log_at,
                         "stop_requested_at": j.stop_requested_at,
                         "completed_reason": j.completed_reason,
+                        "completion": job_completion_json(runner, &j.id),
                         "workflow_id": j.workflow_id,
                     })
                 })
@@ -2210,6 +2312,7 @@ pub fn handle_get_job(job_id: &str, runner: &JobRunner) -> tiny_http::ResponseBo
                 "last_log_at": j.last_log_at,
                 "stop_requested_at": j.stop_requested_at,
                 "completed_reason": j.completed_reason,
+                "completion": job_completion_json(runner, &j.id),
                 "workflow_id": j.workflow_id,
             }),
         ),

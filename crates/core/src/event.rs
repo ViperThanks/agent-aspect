@@ -33,6 +33,73 @@ impl Display for Phase {
     }
 }
 
+/// Agent hook 生命周期事件类型 — 标识 hook 触发的阶段。
+///
+/// 不同 AI agent 支持的 hook 事件集合不同。例如 Codex CLI 支持
+/// PermissionRequest，而 Claude Code 不支持。`blocking()` 区分
+/// 哪些事件需要同步等待策略决策（PreToolUse/PermissionRequest），
+/// 哪些只是通知（SessionStart/PostToolUse 等）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub enum LifecycleEvent {
+    /// 工具调用前 — 最核心的拦截点，所有 agent 都支持。
+    PreToolUse,
+    /// Codex CLI 权限请求 — 不同于 PreToolUse 的独立审批流。
+    PermissionRequest,
+    /// 工具调用后 — 用于审计记录，不参与规则评估。
+    PostToolUse,
+    /// 会话开始 — agent 进程启动时触发。
+    SessionStart,
+    /// 用户提交 prompt — 用户向 agent 发送消息时触发。
+    UserPromptSubmit,
+    /// 停止 — agent 会话结束时触发。
+    Stop,
+}
+
+impl LifecycleEvent {
+    /// 返回事件名的静态字符串表示。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PreToolUse => "PreToolUse",
+            Self::PermissionRequest => "PermissionRequest",
+            Self::PostToolUse => "PostToolUse",
+            Self::SessionStart => "SessionStart",
+            Self::UserPromptSubmit => "UserPromptSubmit",
+            Self::Stop => "Stop",
+        }
+    }
+
+    /// 该事件是否为阻塞型 — 需要同步等待策略决策。
+    ///
+    /// 只有 PreToolUse 和 PermissionRequest 会阻塞 agent 执行，
+    /// 其余事件仅用于审计记录和状态追踪。
+    pub fn blocking(&self) -> bool {
+        matches!(self, Self::PreToolUse | Self::PermissionRequest)
+    }
+}
+
+impl Display for LifecycleEvent {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for LifecycleEvent {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "PreToolUse" => Ok(Self::PreToolUse),
+            "PermissionRequest" => Ok(Self::PermissionRequest),
+            "PostToolUse" => Ok(Self::PostToolUse),
+            "SessionStart" => Ok(Self::SessionStart),
+            "UserPromptSubmit" => Ok(Self::UserPromptSubmit),
+            "Stop" => Ok(Self::Stop),
+            _ => Err(format!("unknown lifecycle event: {s}")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentId {

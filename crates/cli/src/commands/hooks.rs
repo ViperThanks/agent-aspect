@@ -245,7 +245,9 @@ fn reconcile_hooks() {
         let agent_cfg = config.agent_hook_config(agent_id);
 
         let result = if agent_cfg.enabled {
-            strategy.reconcile_add(&hook_str)
+            let enabled = hook_status::enabled_events_for_agent(&config, agent_id);
+            let enabled_refs: Vec<&str> = enabled.iter().map(|s| s.as_str()).collect();
+            strategy.reconcile_add(&hook_str, &enabled_refs)
         } else {
             strategy.reconcile_remove()
         };

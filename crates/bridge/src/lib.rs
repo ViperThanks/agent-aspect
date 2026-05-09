@@ -4,11 +4,13 @@
 //! 由 `main.rs` 引用后启动 HTTP server。
 
 pub mod auth;
+pub mod completion;
 pub mod context;
 pub mod jobs;
 pub mod provider;
 pub mod relay_client;
 pub mod routes;
+pub mod scanner;
 pub mod sse;
 pub mod ui;
 pub mod workflows;

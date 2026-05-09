@@ -30,7 +30,6 @@ export AGENT_ASPECT_BRIDGE_ADDR="127.0.0.1:$PORT"
 echo "=== starting bridge on $AGENT_ASPECT_BRIDGE_ADDR ==="
 "$BIN/agent-aspect-bridge" &
 BRIDGE_PID=$!
-sleep 1
 
 cleanup() {
     kill "$BRIDGE_PID" 2>/dev/null || true
@@ -72,6 +71,23 @@ fi
 
 API="http://127.0.0.1:$PORT"
 AUTH="Authorization: Bearer $TOKEN"
+
+READY=0
+for i in $(seq 1 30); do
+    if curl -s "$API/health" | grep -q '"status":"ok"'; then
+        READY=1
+        break
+    fi
+    if ! kill -0 "$BRIDGE_PID" 2>/dev/null; then
+        echo "FAIL: bridge exited before becoming ready"
+        exit 1
+    fi
+    sleep 0.5
+done
+if [ "$READY" != "1" ]; then
+    echo "FAIL: bridge health not ready after 15s"
+    exit 1
+fi
 
 FAILED=0
 

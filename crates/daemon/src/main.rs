@@ -134,9 +134,13 @@ fn read_fully(stream: &mut UnixStream) -> Option<String> {
     Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
-/// 处理单个客户端连接：读取请求 → 分发到对应处理器 → 写回响应。
+/// 处理单个客户端连接：读取请求 → 分发到对应 dispatch 函数 → 写回响应。
 ///
-/// 支持三种请求类型：Evaluate（工具使用审核）、Override（用户覆盖）、Metadata（会话元数据）。
+/// 四种请求类型的分发：
+/// - Evaluate → `dispatch_evaluate`（三级开关 + 规范化 + 规则引擎 + 审计）
+/// - Override → `handle_override`（用户覆盖判定）
+/// - Metadata → `dispatch_metadata`（会话元数据采集）
+/// - Stop → `dispatch_stop`（stop hook 信号）
 fn handle_client(mut stream: UnixStream, store: &AuditStore, engine: &RuleEngine) {
     let raw = match read_fully(&mut stream) {
         Some(r) => r,
@@ -162,113 +166,7 @@ fn handle_client(mut stream: UnixStream, store: &AuditStore, engine: &RuleEngine
             agent,
             device_id,
         } => {
-            let device_id = device_id.unwrap_or_else(|| "local-hook".to_string());
-            let now = chrono::Utc::now().to_rfc3339();
-            if let Err(e) = store.register_device(&device_id, Some("agent-aspect-hook"), None, &now)
-            {
-                log_info!("register device failed: {e}");
-            }
-
-            // 三级开关判断：全局 → agent enabled → agent pretooluse
-            let cfg =
-                Config::load(&Config::config_path()).unwrap_or_else(|_| Config::default_config());
-            let agent_str = agent.as_ref().map(|a| a.as_str()).unwrap_or("claude_code");
-
-            if !cfg.pretooluse_enabled {
-                log_info!("pretooluse evaluation disabled, allowing");
-                let resp = WireResponse {
-                    event_id: None,
-                    action: Action::Allow,
-                    note: "pretooluse evaluation disabled".to_string(),
-                };
-                write_wire_response(&mut stream, &resp);
-                return;
-            }
-
-            let agent_hook = cfg.agent_hook_config(agent_str);
-            if !agent_hook.enabled {
-                log_info!("agent {agent_str} disabled, allowing");
-                let resp = WireResponse {
-                    event_id: None,
-                    action: Action::Allow,
-                    note: "agent disabled".to_string(),
-                };
-                write_wire_response(&mut stream, &resp);
-                return;
-            }
-
-            if !agent_hook.pretooluse_enabled {
-                log_info!("agent {agent_str} pretooluse disabled, allowing");
-                let resp = WireResponse {
-                    event_id: None,
-                    action: Action::Allow,
-                    note: "agent pretooluse disabled".to_string(),
-                };
-                write_wire_response(&mut stream, &resp);
-                return;
-            }
-
-            // 根据 agent 类型选择对应的 payload 规范化函数
-            let normalize_fn = match agent {
-                Some(AgentId::CodexCli) => normalize_codex_pre_tool_use,
-                Some(AgentId::KimiCode) => normalize_kimi_pre_tool_use,
-                Some(AgentId::GeminiCli) => normalize_gemini_pre_tool_use,
-                Some(AgentId::ClaudeCode) | None => normalize_claude_pre_tool_use,
-                Some(other) => {
-                    log_info!("unsupported agent: {other}, denying");
-                    let resp = WireResponse::deny(format!("unsupported agent: {other}"));
-                    write_wire_response(&mut stream, &resp);
-                    return;
-                }
-            };
-
-            match normalize_fn(&payload) {
-                Ok(event) => {
-                    // 先运行静态规则引擎，再检查学习规则。
-                    // 只有静态规则没有匹配且默认为 Allow 时，才查询学习规则。
-                    let mut decision = engine.evaluate(&event);
-                    if decision.rule_id.is_none() && decision.action == Action::Allow {
-                        if let Ok(true) =
-                            store.has_learned_allow(event.agent.as_str(), &event.tool_name)
-                        {
-                            decision.rule_id = Some("[aspect-learned]".to_string());
-                            decision.note = "[aspect-learned] auto-allowed".to_string();
-                        }
-                    }
-
-                    // 审计写入：记录事件和判定结果（失败只记日志，不阻塞流程）
-                    if let Err(e) = store.insert_event(
-                        &event.id,
-                        event.phase.as_str(),
-                        &event.event_type,
-                        event.agent.as_str(),
-                        &event.tool_name,
-                        event.tool_input.file_path.as_deref(),
-                        &event.timestamp,
-                        &payload,
-                    ) {
-                        log_info!("audit write event failed: {e}");
-                    }
-                    if let Err(e) = store.insert_decision_for_device(
-                        &decision.event_id,
-                        decision.action.as_str(),
-                        decision.rule_id.as_deref(),
-                        &decision.note,
-                        &chrono::Utc::now().to_rfc3339(),
-                        Some(&device_id),
-                    ) {
-                        log_info!("audit write decision failed: {e}");
-                    }
-
-                    let resp = WireResponse::from_decision(&decision);
-                    write_wire_response(&mut stream, &resp);
-                }
-                Err(e) => {
-                    log_info!("normalize error: {e}");
-                    let resp = WireResponse::deny(format!("internal error: {e}"));
-                    write_wire_response(&mut stream, &resp);
-                }
-            }
+            dispatch_evaluate(&mut stream, &payload, agent, device_id, store, engine);
         }
         WireRequest::Override {
             event_id,
@@ -286,51 +184,190 @@ fn handle_client(mut stream: UnixStream, store: &AuditStore, engine: &RuleEngine
             handle_override(&override_request, store, &mut stream, device_id.as_deref());
         }
         WireRequest::Metadata { payload, agent, .. } => {
-            // 检查 per-agent metadata 开关
-            let cfg =
-                Config::load(&Config::config_path()).unwrap_or_else(|_| Config::default_config());
-            let agent_str = agent.as_ref().map(|a| a.as_str()).unwrap_or("claude_code");
-            let agent_hook = cfg.agent_hook_config(agent_str);
-            if !agent_hook.enabled || !agent_hook.metadata_enabled {
-                log_info!("agent {agent_str} metadata disabled, allowing");
-                let resp = WireResponse {
-                    event_id: None,
-                    action: Action::Allow,
-                    note: String::new(),
-                };
-                write_wire_response(&mut stream, &resp);
-            } else {
-                handle_metadata(&payload, agent.as_ref(), store, &mut stream);
-            }
+            dispatch_metadata(&mut stream, &payload, agent, store);
         }
         WireRequest::Stop {
             payload,
             agent,
             device_id,
         } => {
-            // 检查 per-agent stop 开关
-            let cfg =
-                Config::load(&Config::config_path()).unwrap_or_else(|_| Config::default_config());
-            let agent_str = agent.as_ref().map(|a| a.as_str()).unwrap_or("claude_code");
-            let agent_hook = cfg.agent_hook_config(agent_str);
-            if !agent_hook.enabled || !agent_hook.stop_enabled {
-                log_info!("agent {agent_str} stop disabled, allowing");
-                let resp = WireResponse {
-                    event_id: None,
-                    action: Action::Allow,
-                    note: String::new(),
-                };
-                write_wire_response(&mut stream, &resp);
-            } else {
-                handle_stop(
-                    &payload,
-                    agent.as_ref(),
-                    device_id.as_deref(),
-                    store,
-                    &mut stream,
-                );
-            }
+            dispatch_stop(&mut stream, &payload, agent, device_id.as_deref(), store);
         }
+    }
+}
+
+/// 分发 Evaluate 请求：三级开关判断 → 规范化 → 规则引擎 → 学习规则 → 审计写入。
+///
+/// 将 `WireRequest::Evaluate` 匹配分支的逻辑提取为独立函数，保持行为不变。
+fn dispatch_evaluate(
+    stream: &mut UnixStream,
+    payload: &str,
+    agent: Option<AgentId>,
+    device_id: Option<String>,
+    store: &AuditStore,
+    engine: &RuleEngine,
+) {
+    let device_id = device_id.unwrap_or_else(|| "local-hook".to_string());
+    let now = chrono::Utc::now().to_rfc3339();
+    if let Err(e) = store.register_device(&device_id, Some("agent-aspect-hook"), None, &now) {
+        log_info!("register device failed: {e}");
+    }
+
+    // 三级开关判断：全局 → agent enabled → agent pretooluse
+    let cfg = Config::load(&Config::config_path()).unwrap_or_else(|_| Config::default_config());
+    let agent_str = agent.as_ref().map(|a| a.as_str()).unwrap_or("claude_code");
+
+    if !cfg.pretooluse_enabled {
+        log_info!("pretooluse evaluation disabled, allowing");
+        let resp = WireResponse {
+            event_id: None,
+            action: Action::Allow,
+            note: "pretooluse evaluation disabled".to_string(),
+        };
+        write_wire_response(stream, &resp);
+        return;
+    }
+
+    let agent_hook = cfg.agent_hook_config(agent_str);
+    if !agent_hook.enabled {
+        log_info!("agent {agent_str} disabled, allowing");
+        let resp = WireResponse {
+            event_id: None,
+            action: Action::Allow,
+            note: "agent disabled".to_string(),
+        };
+        write_wire_response(stream, &resp);
+        return;
+    }
+
+    if !agent_hook.is_event_enabled("PreToolUse") {
+        log_info!("agent {agent_str} PreToolUse disabled, allowing");
+        let resp = WireResponse {
+            event_id: None,
+            action: Action::Allow,
+            note: "agent PreToolUse disabled".to_string(),
+        };
+        write_wire_response(stream, &resp);
+        return;
+    }
+
+    // 根据 agent 类型选择对应的 payload 规范化函数
+    let normalize_fn = match agent {
+        Some(AgentId::CodexCli) => normalize_codex_pre_tool_use,
+        Some(AgentId::KimiCode) => normalize_kimi_pre_tool_use,
+        Some(AgentId::GeminiCli) => normalize_gemini_pre_tool_use,
+        Some(AgentId::ClaudeCode) | None => normalize_claude_pre_tool_use,
+        Some(other) => {
+            log_info!("unsupported agent: {other}, denying");
+            let resp = WireResponse::deny(format!("unsupported agent: {other}"));
+            write_wire_response(stream, &resp);
+            return;
+        }
+    };
+
+    match normalize_fn(payload) {
+        Ok(event) => {
+            // 先运行静态规则引擎，再检查学习规则。
+            // 只有静态规则没有匹配且默认为 Allow 时，才查询学习规则。
+            let mut decision = engine.evaluate(&event);
+            if decision.rule_id.is_none() && decision.action == Action::Allow {
+                if let Ok(true) = store.has_learned_allow(event.agent.as_str(), &event.tool_name) {
+                    decision.rule_id = Some("[aspect-learned]".to_string());
+                    decision.note = "[aspect-learned] auto-allowed".to_string();
+                }
+            }
+
+            // 审计写入：记录事件和判定结果（失败只记日志，不阻塞流程）
+            if let Err(e) = store.insert_event(
+                &event.id,
+                event.phase.as_str(),
+                &event.event_type,
+                event.agent.as_str(),
+                &event.tool_name,
+                event.tool_input.file_path.as_deref(),
+                &event.timestamp,
+                payload,
+            ) {
+                log_info!("audit write event failed: {e}");
+            }
+            if let Err(e) = store.insert_decision_for_device(
+                &decision.event_id,
+                decision.action.as_str(),
+                decision.rule_id.as_deref(),
+                &decision.note,
+                &chrono::Utc::now().to_rfc3339(),
+                Some(&device_id),
+            ) {
+                log_info!("audit write decision failed: {e}");
+            }
+
+            let resp = WireResponse::from_decision(&decision);
+            write_wire_response(stream, &resp);
+        }
+        Err(e) => {
+            log_info!("normalize error: {e}");
+            let resp = WireResponse::deny(format!("internal error: {e}"));
+            write_wire_response(stream, &resp);
+        }
+    }
+}
+
+/// 分发 Metadata 请求：检查 per-agent metadata 开关，通过则调用 handle_metadata。
+///
+/// 将 `WireRequest::Metadata` 匹配分支的开关判断逻辑提取为独立函数，保持行为不变。
+fn dispatch_metadata(
+    stream: &mut UnixStream,
+    payload: &str,
+    agent: Option<AgentId>,
+    store: &AuditStore,
+) {
+    let cfg = Config::load(&Config::config_path()).unwrap_or_else(|_| Config::default_config());
+    let agent_str = agent.as_ref().map(|a| a.as_str()).unwrap_or("claude_code");
+    let hook_event = serde_json::from_str::<serde_json::Value>(payload)
+        .ok()
+        .and_then(|v| {
+            v.get("hook_event_name")
+                .and_then(|e| e.as_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| "SessionStart".to_string());
+    let agent_hook = cfg.agent_hook_config(agent_str);
+    if !agent_hook.enabled || !agent_hook.is_event_enabled(&hook_event) {
+        log_info!("agent {agent_str} {hook_event} disabled, allowing");
+        let resp = WireResponse {
+            event_id: None,
+            action: Action::Allow,
+            note: String::new(),
+        };
+        write_wire_response(stream, &resp);
+    } else {
+        handle_metadata(payload, agent.as_ref(), store, stream);
+    }
+}
+
+/// 分发 Stop 请求：检查 per-agent stop 开关，通过则调用 handle_stop。
+///
+/// 将 `WireRequest::Stop` 匹配分支的开关判断逻辑提取为独立函数，保持行为不变。
+fn dispatch_stop(
+    stream: &mut UnixStream,
+    payload: &str,
+    agent: Option<AgentId>,
+    device_id: Option<&str>,
+    store: &AuditStore,
+) {
+    let cfg = Config::load(&Config::config_path()).unwrap_or_else(|_| Config::default_config());
+    let agent_str = agent.as_ref().map(|a| a.as_str()).unwrap_or("claude_code");
+    let agent_hook = cfg.agent_hook_config(agent_str);
+    if !agent_hook.enabled || !agent_hook.is_event_enabled("Stop") {
+        log_info!("agent {agent_str} stop disabled, allowing");
+        let resp = WireResponse {
+            event_id: None,
+            action: Action::Allow,
+            note: String::new(),
+        };
+        write_wire_response(stream, &resp);
+    } else {
+        handle_stop(payload, agent.as_ref(), device_id, store, stream);
     }
 }
 

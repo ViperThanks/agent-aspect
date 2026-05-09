@@ -3,6 +3,7 @@
 //! 每个子模块为 `AuditStore` 实现对应领域的方法。
 //! `AuditStore` 保持单一 facade；调用方统一从 `crate::audit` 导入。
 
+pub mod completion;
 pub mod conversations;
 pub mod decisions;
 pub mod devices;

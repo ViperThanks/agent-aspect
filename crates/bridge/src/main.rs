@@ -14,7 +14,9 @@
 //! - 每个非 SSE 请求在独立线程中处理，DB 通过 Arc<Mutex<>> 串行化
 //! - 后台 import 线程每 5 分钟执行一次，与请求线程共享 DB 连接
 
-use agent_aspect_bridge::{auth, context::AppContext, jobs, relay_client, routes, sse, workflows};
+use agent_aspect_bridge::{
+    auth, context::AppContext, jobs, relay_client, routes, scanner, sse, workflows,
+};
 use agent_aspect_core::config::Config;
 use agent_aspect_core::paths;
 use agent_aspect_core::provider_registry::ProviderRegistry;
@@ -78,13 +80,14 @@ fn main() {
     }
 
     let job_runner = Arc::new(jobs::JobRunner::new(
-        paths::audit_db_path(), // job runner 打开独立 DB 连接
+        paths::audit_db_path(), // job runner 打开独立 DB 连接用于内部操作
         config.job_timeout_secs,
         agent_prompt_timeout_secs,
         config.job_max_output_kb,
         broadcaster.clone(),
         resolver.clone(),
         registry.clone(),
+        ctx.store.clone(), // shared store for CompletionSink
     ));
 
     let workflow_runner = Arc::new(workflows::WorkflowRunner::new(
@@ -111,6 +114,14 @@ fn main() {
                 std::thread::sleep(std::time::Duration::from_secs(300));
                 run_bg();
             }
+        });
+    }
+
+    // 5.5 启动 transcript scanner 后台线程：定时扫描活跃 observer 的 transcript 增量
+    {
+        let scanner_db_path = paths::audit_db_path();
+        std::thread::spawn(move || {
+            scanner::start_scanner_loop(scanner_db_path, 5);
         });
     }
 

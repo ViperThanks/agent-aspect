@@ -4,6 +4,7 @@
 //! 供 CLI `hooks status` 和 Bridge `GET /hook-status` 复用。
 
 use crate::config::Config;
+use crate::event::LifecycleEvent;
 use crate::paths;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -19,8 +20,9 @@ fn is_legacy_command(cmd: &str) -> bool {
     cmd.contains(LEGACY_HOOK_MARKER)
 }
 
-/// 所有 agent 应安装的事件列表。
-const ALL_EVENTS: &[&str] = &["PreToolUse", "SessionStart", "UserPromptSubmit", "Stop"];
+/// 兼容性测试用的基础事件列表。
+#[cfg(test)]
+const BASE_EVENTS: &[&str] = &["PreToolUse", "SessionStart", "UserPromptSubmit", "Stop"];
 
 /// Agent 显示标签映射。
 #[allow(dead_code)]
@@ -61,6 +63,8 @@ pub struct HookAgentStatus {
     pub legacy_present: bool,
     /// "ok" | "disabled" | "partial" | "missing_config" | "missing_hook_binary"
     pub status: String,
+    /// per-event 安装状态详情（来自 registry）。
+    pub event_details: Vec<HookEventDetail>,
 }
 
 /// 完整的 hook 状态响应。
@@ -79,6 +83,129 @@ pub struct ReconcileReport {
     pub events_removed: Vec<String>,
 }
 
+/// 单个 lifecycle event 在特定 agent 上的安装规格。
+#[derive(Debug, Clone)]
+pub struct HookEventSpec {
+    /// 内部 lifecycle event 枚举。
+    pub event: LifecycleEvent,
+    /// Codex 配置文件中的事件名称（hooks.json 的 key）。
+    pub codex_name: &'static str,
+    /// Claude 配置文件中的事件名称（settings.json 的 key），None 表示该 agent 不支持此事件。
+    pub claude_name: Option<&'static str>,
+    /// Kimi 配置文件中的事件名称（config.toml 的 event 值），None 表示该 agent 不支持此事件。
+    pub kimi_name: Option<&'static str>,
+    /// 事件所处阶段。
+    pub phase: &'static str,
+    /// 是否必须在配置中安装。
+    pub required: bool,
+    /// 是否阻断（决定是否需要规则评估）。
+    pub blocking: bool,
+}
+
+/// 单个 lifecycle event 的安装状态。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookEventDetail {
+    /// LifecycleEvent 名称（如 "PreToolUse"）。
+    pub event: String,
+    /// 事件阶段（如 "before"、"session"）。
+    pub phase: String,
+    /// 是否已安装到 agent 配置中。
+    pub installed: bool,
+    /// 配置层是否启用（区别于"已安装"状态）。
+    pub config_enabled: bool,
+    /// 是否为必需事件。
+    pub required: bool,
+    /// 是否为阻断型事件。
+    pub blocking: bool,
+}
+
+// ── Strategy trait ───────────────────────────────────────────────────
+
+/// 返回所有已知 lifecycle event 的规格表。
+pub fn event_registry() -> &'static [HookEventSpec] {
+    &[
+        HookEventSpec {
+            event: LifecycleEvent::PreToolUse,
+            codex_name: "PreToolUse",
+            claude_name: Some("PreToolUse"),
+            kimi_name: Some("PreToolUse"),
+            phase: "before",
+            required: true,
+            blocking: true,
+        },
+        HookEventSpec {
+            event: LifecycleEvent::PermissionRequest,
+            codex_name: "PermissionRequest",
+            claude_name: None,
+            kimi_name: None,
+            phase: "permission",
+            required: false,
+            blocking: true,
+        },
+        HookEventSpec {
+            event: LifecycleEvent::PostToolUse,
+            codex_name: "PostToolUse",
+            claude_name: None,
+            kimi_name: None,
+            phase: "after",
+            required: false,
+            blocking: false,
+        },
+        HookEventSpec {
+            event: LifecycleEvent::SessionStart,
+            codex_name: "SessionStart",
+            claude_name: Some("SessionStart"),
+            kimi_name: Some("SessionStart"),
+            phase: "session",
+            required: true,
+            blocking: false,
+        },
+        HookEventSpec {
+            event: LifecycleEvent::UserPromptSubmit,
+            codex_name: "UserPromptSubmit",
+            claude_name: Some("UserPromptSubmit"),
+            kimi_name: Some("UserPromptSubmit"),
+            phase: "prompt",
+            required: true,
+            blocking: false,
+        },
+        HookEventSpec {
+            event: LifecycleEvent::Stop,
+            codex_name: "Stop",
+            claude_name: Some("Stop"),
+            kimi_name: Some("Stop"),
+            phase: "turn_end",
+            required: true,
+            blocking: false,
+        },
+    ]
+}
+
+/// 返回指定 agent 支持的事件名称列表（基于 registry）。
+pub fn agent_events(agent_id: &str) -> Vec<&'static str> {
+    event_registry()
+        .iter()
+        .filter_map(|spec| spec.agent_event_name(agent_id))
+        .collect()
+}
+
+impl HookEventSpec {
+    /// 获取指定 agent 的事件名称。
+    pub fn agent_event_name(&self, agent_id: &str) -> Option<&'static str> {
+        match agent_id {
+            "codex_cli" => Some(self.codex_name),
+            "claude_code" => self.claude_name,
+            "kimi_code" => self.kimi_name,
+            _ => None,
+        }
+    }
+
+    /// 该 agent 是否支持此事件。
+    pub fn supported_by(&self, agent_id: &str) -> bool {
+        self.agent_event_name(agent_id).is_some()
+    }
+}
+
 // ── Strategy trait ───────────────────────────────────────────────────
 
 /// Agent hook 配置策略 — 封装不同 agent 的配置文件格式差异。
@@ -95,8 +222,12 @@ pub trait AgentHookStrategy: Send + Sync {
     fn read_commands(&self) -> Vec<String>;
     /// 是否存在旧版 checkpoint-hook 残留。
     fn has_legacy_entries(&self) -> bool;
-    /// 添加 hook 条目（reconcile add）。
-    fn reconcile_add(&self, hook_binary: &str) -> Result<ReconcileReport, String>;
+    /// 添加 hook 条目（reconcile add）— 只安装 enabled_events 列表中的事件。
+    fn reconcile_add(
+        &self,
+        hook_binary: &str,
+        enabled_events: &[&str],
+    ) -> Result<ReconcileReport, String>;
     /// 移除 hook 条目（reconcile remove）。
     fn reconcile_remove(&self) -> Result<ReconcileReport, String>;
 }
@@ -131,8 +262,12 @@ impl AgentHookStrategy for ClaudeJsonStrategy {
         json_has_legacy(&self.config_path())
     }
 
-    fn reconcile_add(&self, hook_binary: &str) -> Result<ReconcileReport, String> {
-        reconcile_json_add(&self.config_path(), "claude", hook_binary)
+    fn reconcile_add(
+        &self,
+        hook_binary: &str,
+        enabled_events: &[&str],
+    ) -> Result<ReconcileReport, String> {
+        reconcile_json_add(&self.config_path(), "claude", hook_binary, enabled_events)
     }
 
     fn reconcile_remove(&self) -> Result<ReconcileReport, String> {
@@ -170,8 +305,12 @@ impl AgentHookStrategy for CodexJsonStrategy {
         json_has_legacy(&self.config_path())
     }
 
-    fn reconcile_add(&self, hook_binary: &str) -> Result<ReconcileReport, String> {
-        reconcile_json_add(&self.config_path(), "codex", hook_binary)
+    fn reconcile_add(
+        &self,
+        hook_binary: &str,
+        enabled_events: &[&str],
+    ) -> Result<ReconcileReport, String> {
+        reconcile_json_add(&self.config_path(), "codex", hook_binary, enabled_events)
     }
 
     fn reconcile_remove(&self) -> Result<ReconcileReport, String> {
@@ -209,8 +348,12 @@ impl AgentHookStrategy for KimiTomlStrategy {
         kimi_has_legacy(&self.config_path())
     }
 
-    fn reconcile_add(&self, hook_binary: &str) -> Result<ReconcileReport, String> {
-        reconcile_kimi_add(&self.config_path(), hook_binary)
+    fn reconcile_add(
+        &self,
+        hook_binary: &str,
+        enabled_events: &[&str],
+    ) -> Result<ReconcileReport, String> {
+        reconcile_kimi_add(&self.config_path(), hook_binary, enabled_events)
     }
 
     fn reconcile_remove(&self) -> Result<ReconcileReport, String> {
@@ -229,6 +372,24 @@ pub fn strategies() -> Vec<Box<dyn AgentHookStrategy>> {
     ]
 }
 
+/// 返回指定 agent 在 config 中启用的事件名称列表。
+///
+/// 遍历 event_registry()，过滤出该 agent 支持 + config 启用的事件。
+/// reconcile 调用方应使用此列表代替 BASE_EVENTS。
+pub fn enabled_events_for_agent(config: &Config, agent_id: &str) -> Vec<String> {
+    let agent_cfg = config.agent_hook_config(agent_id);
+    if !agent_cfg.enabled {
+        return Vec::new();
+    }
+    event_registry()
+        .iter()
+        .filter(|spec| spec.supported_by(agent_id))
+        .filter_map(|spec| spec.agent_event_name(agent_id))
+        .filter(|name| agent_cfg.is_event_enabled(name))
+        .map(|s| s.to_string())
+        .collect()
+}
+
 /// 读取完整的 hook 状态报告。
 pub fn read_full_status(config: &Config, hook_binary: Option<&PathBuf>) -> HookGlobalStatus {
     let config_path = Config::config_path();
@@ -240,6 +401,7 @@ pub fn read_full_status(config: &Config, hook_binary: Option<&PathBuf>) -> HookG
     };
 
     let mut agents = Vec::new();
+    let registry = event_registry();
     for strategy in strategies() {
         let agent_id = strategy.agent_id();
         let agent_cfg = config.agent_hook_config(agent_id);
@@ -247,10 +409,34 @@ pub fn read_full_status(config: &Config, hook_binary: Option<&PathBuf>) -> HookG
         let config_exists = config_path.exists();
 
         let installed_events = strategy.read_installed_events();
-        let missing_events: Vec<String> = ALL_EVENTS
+
+        // 基于 registry 过滤：只报告该 agent 支持的事件中缺失的
+        let agent_supported_names: Vec<&str> = registry
             .iter()
+            .filter(|spec| spec.supported_by(agent_id))
+            .filter_map(|spec| spec.agent_event_name(agent_id))
+            .collect();
+        let missing_events: Vec<String> = agent_supported_names
+            .iter()
+            .filter(|e| agent_cfg.enabled && agent_cfg.is_event_enabled(e))
             .filter(|e| !installed_events.contains(&e.to_string()))
             .map(|e| e.to_string())
+            .collect();
+
+        // 构建 per-event 安装状态详情
+        let event_details: Vec<HookEventDetail> = registry
+            .iter()
+            .filter(|spec| spec.supported_by(agent_id))
+            .filter_map(|spec| {
+                spec.agent_event_name(agent_id).map(|name| HookEventDetail {
+                    event: name.to_string(),
+                    phase: spec.phase.to_string(),
+                    installed: installed_events.contains(&name.to_string()),
+                    config_enabled: agent_cfg.is_event_enabled(name),
+                    required: spec.required,
+                    blocking: spec.blocking,
+                })
+            })
             .collect();
 
         let commands = strategy.read_commands();
@@ -278,6 +464,7 @@ pub fn read_full_status(config: &Config, hook_binary: Option<&PathBuf>) -> HookG
             commands,
             legacy_present,
             status,
+            event_details,
         });
     }
 
@@ -323,8 +510,8 @@ fn read_json_installed_events(path: &PathBuf) -> Vec<String> {
     };
 
     let mut installed = Vec::new();
-    for event_key in ALL_EVENTS {
-        if let Some(arr) = hooks.get(*event_key).and_then(|a| a.as_array()) {
+    for (event_key, value) in hooks {
+        if let Some(arr) = value.as_array() {
             for entry in arr {
                 if json_entry_has_marker(entry) {
                     installed.push(event_key.to_string());
@@ -613,7 +800,12 @@ fn hook_command(hook: &str, agent: &str) -> String {
 }
 
 /// JSON 配置：添加 hook 条目（先清理旧版残留）。
-fn reconcile_json_add(path: &PathBuf, agent: &str, hook_binary: &str) -> Result<ReconcileReport, String> {
+fn reconcile_json_add(
+    path: &PathBuf,
+    agent: &str,
+    hook_binary: &str,
+    enabled_events: &[&str],
+) -> Result<ReconcileReport, String> {
     let mut root = read_json_file(path).unwrap_or(serde_json::json!({}));
     let command = hook_command(hook_binary, agent);
 
@@ -621,7 +813,7 @@ fn reconcile_json_add(path: &PathBuf, agent: &str, hook_binary: &str) -> Result<
     let legacy_removed = remove_json_legacy_entries(&mut root);
 
     let mut events_added = Vec::new();
-    for event in ALL_EVENTS {
+    for event in enabled_events {
         if !json_event_has_hook(&root, event) {
             add_json_hook_entry(&mut root, event, &command);
             events_added.push(event.to_string());
@@ -681,12 +873,12 @@ fn reconcile_json_remove(path: &PathBuf, agent: &str) -> Result<ReconcileReport,
     // 移除当前 agent 的条目
     let command_prefix = format!("AGENT_ASPECT_AGENT={agent}");
     if let Some(hooks) = root.get_mut("hooks").and_then(|h| h.as_object_mut()) {
-        for event in ALL_EVENTS {
-            if let Some(arr) = hooks.get_mut(*event).and_then(|a| a.as_array_mut()) {
+        for (event, value) in hooks.iter_mut() {
+            if let Some(arr) = value.as_array_mut() {
                 let before = arr.len();
                 arr.retain(|entry| !json_entry_matches_agent(entry, &command_prefix));
-                if arr.len() < before && !events_removed.contains(&event.to_string()) {
-                    events_removed.push(event.to_string());
+                if arr.len() < before && !events_removed.contains(event) {
+                    events_removed.push(event.clone());
                 }
             }
         }
@@ -768,8 +960,12 @@ fn write_json_file(path: &PathBuf, value: &serde_json::Value) -> Result<(), Stri
 
 // ── Kimi TOML reconcile ──────────────────────────────────────────────
 
-/// Kimi TOML：添加 hook 条目（先清理旧版残留）。
-fn reconcile_kimi_add(path: &PathBuf, hook_binary: &str) -> Result<ReconcileReport, String> {
+/// Kimi TOML：添加 hook 条目（先清理旧版残留）— 只安装 enabled_events 列表中的事件。
+fn reconcile_kimi_add(
+    path: &PathBuf,
+    hook_binary: &str,
+    enabled_events: &[&str],
+) -> Result<ReconcileReport, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("create_dir: {e}"))?;
     }
@@ -788,7 +984,7 @@ fn reconcile_kimi_add(path: &PathBuf, hook_binary: &str) -> Result<ReconcileRepo
     content = cleaned;
 
     let mut events_added = Vec::new();
-    for event in ALL_EVENTS {
+    for event in enabled_events {
         if !kimi_event_has_current_hook(&content, event) {
             if !content.trim().is_empty() && !content.ends_with('\n') {
                 content.push('\n');
@@ -1036,6 +1232,31 @@ mod tests {
         assert!(events.contains(&"Stop".to_string()));
     }
 
+    /// JSON 解析：Codex 专属事件不能被旧四事件列表漏掉。
+    #[test]
+    fn json_config_reports_codex_extended_events() {
+        let dir = crate::test_util::unique_temp_dir("hook_status_json_codex_extended");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("hooks.json");
+        let content = serde_json::json!({
+            "hooks": {
+                "PermissionRequest": [{
+                    "matcher": "",
+                    "hooks": [{"type": "command", "command": "AGENT_ASPECT_AGENT=codex /usr/local/bin/agent-aspect-hook"}]
+                }],
+                "PostToolUse": [{
+                    "matcher": "",
+                    "hooks": [{"type": "command", "command": "AGENT_ASPECT_AGENT=codex /usr/local/bin/agent-aspect-hook"}]
+                }]
+            }
+        });
+        std::fs::write(&path, serde_json::to_string(&content).unwrap()).unwrap();
+
+        let events = read_json_installed_events(&path);
+        assert!(events.contains(&"PermissionRequest".to_string()));
+        assert!(events.contains(&"PostToolUse".to_string()));
+    }
+
     /// JSON 解析：部分安装返回 partial 缺失。
     #[test]
     fn json_partial_config_reports_missing() {
@@ -1055,13 +1276,42 @@ mod tests {
         let events = read_json_installed_events(&path);
         assert_eq!(events, vec!["PreToolUse"]);
 
-        let missing: Vec<String> = ALL_EVENTS
+        let missing: Vec<String> = BASE_EVENTS
             .iter()
             .filter(|e| !events.contains(&e.to_string()))
             .map(|e| e.to_string())
             .collect();
         assert_eq!(missing.len(), 3);
         assert!(missing.contains(&"Stop".to_string()));
+    }
+
+    /// 状态推导：配置禁用的 event 不应计入 missing。
+    #[test]
+    fn disabled_event_not_reported_missing() {
+        let mut config = Config::default_config();
+        let mut agent_cfg = crate::config::AgentHookConfig::default();
+        agent_cfg.events.insert(
+            "Stop".to_string(),
+            crate::config::EventConfig { enabled: false },
+        );
+        config
+            .agent_hooks
+            .insert("claude_code".to_string(), agent_cfg);
+
+        let status = read_full_status(&config, Some(&PathBuf::from("/missing/hook")));
+        let claude = status
+            .agents
+            .iter()
+            .find(|agent| agent.agent == "claude_code")
+            .unwrap();
+
+        assert!(!claude.missing_events.contains(&"Stop".to_string()));
+        assert!(
+            claude
+                .event_details
+                .iter()
+                .any(|detail| detail.event == "Stop" && !detail.config_enabled)
+        );
     }
 
     /// Kimi TOML 解析：完整的 hook 配置返回四个事件。
@@ -1164,7 +1414,8 @@ command = "AGENT_ASPECT_AGENT=kimi /usr/local/bin/agent-aspect-hook"
 
         let hook_bin = dir.join("agent-aspect-hook");
         std::fs::write(&hook_bin, "").unwrap();
-        let report = reconcile_json_add(&path, "claude", hook_bin.to_str().unwrap()).unwrap();
+        let report =
+            reconcile_json_add(&path, "claude", hook_bin.to_str().unwrap(), BASE_EVENTS).unwrap();
         assert_eq!(report.action, "added");
         assert_eq!(report.events_added.len(), 4);
 
@@ -1185,8 +1436,9 @@ command = "AGENT_ASPECT_AGENT=kimi /usr/local/bin/agent-aspect-hook"
 
         let hook_bin = dir.join("agent-aspect-hook");
         std::fs::write(&hook_bin, "").unwrap();
-        reconcile_json_add(&path, "claude", hook_bin.to_str().unwrap()).unwrap();
-        let report = reconcile_json_add(&path, "claude", hook_bin.to_str().unwrap()).unwrap();
+        reconcile_json_add(&path, "claude", hook_bin.to_str().unwrap(), BASE_EVENTS).unwrap();
+        let report =
+            reconcile_json_add(&path, "claude", hook_bin.to_str().unwrap(), BASE_EVENTS).unwrap();
         assert_eq!(report.action, "unchanged");
         assert!(report.events_added.is_empty());
     }
@@ -1282,7 +1534,8 @@ command = "AGENT_ASPECT_AGENT=kimi /usr/local/bin/agent-aspect-hook"
 
         let hook_bin = dir.join("agent-aspect-hook");
         std::fs::write(&hook_bin, "").unwrap();
-        let report = reconcile_json_add(&path, "claude", hook_bin.to_str().unwrap()).unwrap();
+        let report =
+            reconcile_json_add(&path, "claude", hook_bin.to_str().unwrap(), BASE_EVENTS).unwrap();
 
         // PreToolUse: legacy removed, current kept → no add
         // Stop: legacy removed, current missing → added
@@ -1315,7 +1568,8 @@ command = "AGENT_ASPECT_AGENT=kimi /usr/local/bin/agent-aspect-hook"
 
         let hook_bin = dir.join("agent-aspect-hook");
         std::fs::write(&hook_bin, "").unwrap();
-        let report = reconcile_json_add(&path, "claude", hook_bin.to_str().unwrap()).unwrap();
+        let report =
+            reconcile_json_add(&path, "claude", hook_bin.to_str().unwrap(), BASE_EVENTS).unwrap();
 
         assert!(report.events_removed.contains(&"PreToolUse".to_string()));
         // All 4 events added (legacy PreToolUse was removed, current needs to be added)
@@ -1354,7 +1608,7 @@ command = "AGENT_ASPECT_AGENT=kimi /usr/local/bin/agent-aspect-hook"
 
         let hook_bin = dir.join("agent-aspect-hook");
         std::fs::write(&hook_bin, "").unwrap();
-        reconcile_json_add(&path, "claude", hook_bin.to_str().unwrap()).unwrap();
+        reconcile_json_add(&path, "claude", hook_bin.to_str().unwrap(), BASE_EVENTS).unwrap();
 
         let content = std::fs::read_to_string(&path).unwrap();
 
@@ -1391,7 +1645,7 @@ provider = "managed:kimi"
 
         let hook_bin = dir.join("agent-aspect-hook");
         std::fs::write(&hook_bin, "").unwrap();
-        let _report = reconcile_kimi_add(&path, hook_bin.to_str().unwrap()).unwrap();
+        let _report = reconcile_kimi_add(&path, hook_bin.to_str().unwrap(), BASE_EVENTS).unwrap();
 
         let result = std::fs::read_to_string(&path).unwrap();
         assert!(!result.contains("checkpoint-hook"));
@@ -1416,5 +1670,113 @@ command = "target/release/checkpoint-hook"
         let (cleaned, _removed) = remove_kimi_legacy_blocks(content);
         assert!(cleaned.contains("my-custom-hook"));
         assert!(!cleaned.contains("checkpoint-hook"));
+    }
+
+    // ── Legacy target/debug + target/release path tests ────────────────
+
+    /// JSON reconcile：target/debug/checkpoint-hook 被 remove_json_legacy_entries 清理。
+    #[test]
+    fn json_reconcile_removes_legacy_checkpoint_hook_target_debug() {
+        let dir = crate::test_util::unique_temp_dir("hook_legacy_target_debug");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let initial = serde_json::json!({
+            "hooks": {
+                "PreToolUse": [{
+                    "matcher": "*",
+                    "hooks": [{"type": "command", "command": "AGENT_ASPECT_AGENT=claude target/debug/checkpoint-hook"}]
+                }],
+                "Stop": [{
+                    "matcher": "",
+                    "hooks": [{"type": "command", "command": "target/debug/checkpoint-hook"}]
+                }]
+            }
+        });
+        std::fs::write(&path, serde_json::to_string(&initial).unwrap()).unwrap();
+
+        let hook_bin = dir.join("agent-aspect-hook");
+        std::fs::write(&hook_bin, "").unwrap();
+        let report =
+            reconcile_json_add(&path, "claude", hook_bin.to_str().unwrap(), BASE_EVENTS).unwrap();
+
+        // 两处 legacy 都被清理
+        assert!(report.events_removed.contains(&"PreToolUse".to_string()));
+        assert!(report.events_removed.contains(&"Stop".to_string()));
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(!content.contains("checkpoint-hook"));
+        assert!(content.contains("agent-aspect-hook"));
+    }
+
+    /// JSON reconcile：target/release/checkpoint-hook 被 remove_json_legacy_entries 清理。
+    #[test]
+    fn json_reconcile_removes_legacy_checkpoint_hook_target_release() {
+        let dir = crate::test_util::unique_temp_dir("hook_legacy_target_release");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let initial = serde_json::json!({
+            "hooks": {
+                "SessionStart": [{
+                    "matcher": "",
+                    "hooks": [{"type": "command", "command": "AGENT_ASPECT_AGENT=claude target/release/checkpoint-hook"}]
+                }],
+                "UserPromptSubmit": [{
+                    "matcher": "",
+                    "hooks": [{"type": "command", "command": "/some/path/target/release/checkpoint-hook"}]
+                }]
+            }
+        });
+        std::fs::write(&path, serde_json::to_string(&initial).unwrap()).unwrap();
+
+        let hook_bin = dir.join("agent-aspect-hook");
+        std::fs::write(&hook_bin, "").unwrap();
+        let report =
+            reconcile_json_add(&path, "claude", hook_bin.to_str().unwrap(), BASE_EVENTS).unwrap();
+
+        assert!(report.events_removed.contains(&"SessionStart".to_string()));
+        assert!(
+            report
+                .events_removed
+                .contains(&"UserPromptSubmit".to_string())
+        );
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(!content.contains("checkpoint-hook"));
+        assert!(content.contains("agent-aspect-hook"));
+    }
+
+    /// Kimi TOML reconcile：target/debug/checkpoint-hook 被 remove_kimi_legacy_blocks 清理。
+    #[test]
+    fn kimi_reconcile_removes_legacy_checkpoint_hook_target_debug() {
+        let dir = crate::test_util::unique_temp_dir("hook_kimi_legacy_debug");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        let content = r#"default_model = "kimi"
+
+[[hooks]]
+event = "PreToolUse"
+matcher = "*"
+command = "target/debug/checkpoint-hook"
+
+[[hooks]]
+event = "Stop"
+command = "AGENT_ASPECT_AGENT=kimi target/debug/checkpoint-hook"
+
+[models.kimi]
+provider = "managed:kimi"
+"#;
+        std::fs::write(&path, content).unwrap();
+
+        let hook_bin = dir.join("agent-aspect-hook");
+        std::fs::write(&hook_bin, "").unwrap();
+        let _report = reconcile_kimi_add(&path, hook_bin.to_str().unwrap(), BASE_EVENTS).unwrap();
+
+        let result = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !result.contains("checkpoint-hook"),
+            "target/debug/checkpoint-hook 应被清理"
+        );
+        assert!(result.contains("agent-aspect-hook"));
+        assert!(result.contains("[models.kimi]"));
     }
 }

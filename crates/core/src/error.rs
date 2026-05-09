@@ -207,6 +207,18 @@ pub enum AgentAspectError {
 
     #[error("workflow step dependency invalid: {0}")]
     WorkflowStepDependency(String),
+
+    #[error("insert completion observer failed: {0}")]
+    InsertCompletionObserver(#[source] rusqlite::Error),
+
+    #[error("query completion observer failed: {0}")]
+    QueryCompletionObserver(#[source] rusqlite::Error),
+
+    #[error("update completion observer failed: {0}")]
+    UpdateCompletionObserver(#[source] rusqlite::Error),
+
+    #[error("migrate completion observer schema failed: {0}")]
+    MigrateCompletionObserverSchema(#[source] rusqlite::Error),
 }
 
 pub type AgentAspectResult<T> = Result<T, AgentAspectError>;

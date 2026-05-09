@@ -466,7 +466,10 @@ fn check_hook_status() -> CheckResult {
         CheckResult {
             status: CheckStatus::Warn,
             label: "agent hooks".into(),
-            message: format!("{}: run `agent-aspect hooks status` for details", issues.join(", ")),
+            message: format!(
+                "{}: run `agent-aspect hooks status` for details",
+                issues.join(", ")
+            ),
         }
     }
 }

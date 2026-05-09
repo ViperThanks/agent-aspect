@@ -67,6 +67,7 @@ function ensureRunLayout() {
           '<div id="job-active-area" class="hidden" style="display:flex;flex-direction:column;gap:10px;margin-bottom:16px">' +
             '<div class="job-status-bar">' +
               '<span id="job-status-badge"></span>' +
+              '<span id="job-completed-reason" class="job-completed-reason"></span>' +
               '<span id="job-kind-label"></span>' +
               '<button class="job-cancel hidden" id="job-cancel-btn" onclick="cancelActiveJob()">取消</button>' +
             '</div>' +
@@ -341,6 +342,32 @@ function humanFailureReason(reason) {
   return reason;
 }
 
+function humanCompletedReason(reason) {
+  if (!reason) return '';
+  if (reason === 'stop_hook') return 'stop hook';
+  if (reason === 'process_exit') return '进程退出';
+  if (reason === 'scanner_timeout' || reason === 'timeout_killed') return '超时';
+  if (reason === 'process_exit_nonzero') return '进程异常';
+  return reason;
+}
+
+function cleanCompletionName(value) {
+  if (!value) return '';
+  return String(value).replace(/^"|"$/g, '');
+}
+
+function humanCompletionDetail(completion) {
+  if (!completion) return '';
+  const parts = [];
+  const signal = cleanCompletionName(completion.signal);
+  const authority = cleanCompletionName(completion.authority);
+  if (signal) parts.push(signal);
+  if (authority) parts.push(authority);
+  if (completion.last_activity_at) parts.push('activity ' + relTime(completion.last_activity_at));
+  if (completion.hard_deadline_at) parts.push('deadline ' + relTime(completion.hard_deadline_at));
+  return parts.join(' · ');
+}
+
 function bindActiveChatJob(jobId) {
   RS.chatMessages.forEach(function (m) {
     if (m.id === RS.activeAssistantMessageId || m.id === RS.activeUserMessageId) {
@@ -444,7 +471,7 @@ function showJobActive(id, kind, status) {
   if (logOut) logOut.innerHTML = '';
 }
 
-function updateJobStatusBadge(status) {
+function updateJobStatusBadge(status, completedReason, completion) {
   const badgeEl = document.getElementById('job-status-badge');
   if (!badgeEl) return;
   badgeEl.textContent = STATUS_LABELS[status] || status;
@@ -453,6 +480,18 @@ function updateJobStatusBadge(status) {
   else if (status === 'failed' || status === 'cancelled' || status === 'timeout') badgeEl.classList.add('badge-deny');
   else if (status === 'running' || status === 'queued' || status === 'observing') badgeEl.classList.add('badge-ask');
   else badgeEl.style.background = 'var(--surface3)';
+  var crEl = document.getElementById('job-completed-reason');
+  if (crEl) {
+    var crText = humanCompletedReason(completedReason);
+    var detail = humanCompletionDetail(completion);
+    if ((crText || detail) && (status === 'succeeded' || status === 'failed' || status === 'cancelled' || status === 'timeout')) {
+      crEl.textContent = [crText, detail].filter(Boolean).join(' · ');
+      crEl.classList.remove('hidden');
+    } else {
+      crEl.textContent = '';
+      crEl.classList.add('hidden');
+    }
+  }
 }
 
 function pollJobStatus() {
@@ -461,7 +500,7 @@ function pollJobStatus() {
     if (!RS.activeJobId) return;
     api('/jobs/' + RS.activeJobId).then(function (r) {
       if (r.error) return;
-      updateJobStatusBadge(r.status);
+      updateJobStatusBadge(r.status, r.completed_reason, r.completion);
       const cancelBtn = document.getElementById('job-cancel-btn');
       if (cancelBtn) cancelBtn.classList.toggle('hidden', r.status !== 'running' && r.status !== 'queued' && r.status !== 'observing');
       if (r.status === 'succeeded' || r.status === 'failed' || r.status === 'cancelled' || r.status === 'timeout') {
@@ -477,7 +516,10 @@ function pollJobStatus() {
 // Lightweight SSE-driven refresh: update badge from payload, only full-refresh on terminal
 function refreshActiveJobFromSSE(payload) {
   if (!RS.activeJobId || payload.job_id !== RS.activeJobId) return;
-  updateJobStatusBadge(payload.status);
+  updateJobStatusBadge(payload.status, payload.completed_reason, {
+    signal: payload.completion_signal,
+    authority: payload.completion_authority
+  });
   var cancelBtn = document.getElementById('job-cancel-btn');
   if (cancelBtn) cancelBtn.classList.toggle('hidden', payload.status !== 'running' && payload.status !== 'queued' && payload.status !== 'observing');
   if (payload.status === 'succeeded' || payload.status === 'failed' || payload.status === 'cancelled' || payload.status === 'timeout') {
@@ -492,7 +534,7 @@ function refreshActiveJob() {
   if (!RS.activeJobId) return;
   api('/jobs/' + RS.activeJobId).then(function (r) {
     if (r.error) return;
-    updateJobStatusBadge(r.status);
+    updateJobStatusBadge(r.status, r.completed_reason, r.completion);
     updateChatFromJob(r, null);
     const cancelBtn = document.getElementById('job-cancel-btn');
     if (cancelBtn) cancelBtn.classList.toggle('hidden', r.status !== 'running' && r.status !== 'queued');
@@ -556,11 +598,14 @@ function updateChatFromJob(job, logs) {
   if (!RS.activeAssistantMessageId) return;
   let text = providerLabel(job.provider) + ' 正在处理...';
   if (job.status === 'failed') {
-    text = humanFailureReason(job.failure_reason);
+    text = humanFailureReason(job.failure_reason || job.completed_reason);
   } else if (job.status === 'cancelled') {
-    text = humanFailureReason(job.failure_reason);
+    text = humanFailureReason(job.failure_reason || job.completed_reason);
   } else if (job.status === 'succeeded') {
-    text = '任务已完成。';
+    var cr = humanCompletedReason(job.completed_reason);
+    text = '任务已完成。' + (cr ? '（' + cr + '）' : '');
+  } else if (job.status === 'timeout') {
+    text = humanFailureReason(job.completed_reason || job.failure_reason) || '任务超时';
   }
   setRunMessage(RS.activeAssistantMessageId, { status: job.status, text: text, provider: job.provider });
   if (logs) updateChatFromLogs(logs);

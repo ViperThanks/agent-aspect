@@ -2980,6 +2980,17 @@ pub fn handle_post_hook_config(
             if let Some(v) = patch.get("stop_enabled").and_then(|v| v.as_bool()) {
                 entry.stop_enabled = v;
             }
+            // per-agent per-event 开关：{ "agents": { "claude_code": { "events": { "PreToolUse": { "enabled": true } } } } }
+            if let Some(events) = patch.get("events").and_then(|v| v.as_object()) {
+                for (event_name, event_cfg) in events {
+                    if let Some(enabled) = event_cfg.get("enabled").and_then(|v| v.as_bool()) {
+                        entry.events.insert(
+                            event_name.clone(),
+                            agent_aspect_core::config::EventConfig { enabled },
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -2999,10 +3010,7 @@ pub fn handle_post_hook_config(
     let reconcile_reports = if reconcile {
         let hook_binary = paths::hook_binary_path();
         let Some(hook_binary) = hook_binary else {
-            return json_response(
-                500,
-                &serde_json::json!({"error": "hook binary not found"}),
-            );
+            return json_response(500, &serde_json::json!({"error": "hook binary not found"}));
         };
         let hook_str = hook_binary.display().to_string();
         let mut reports = Vec::new();
@@ -3010,7 +3018,9 @@ pub fn handle_post_hook_config(
         for strategy in hook_status::strategies() {
             let agent_cfg = cfg.agent_hook_config(strategy.agent_id());
             let result = if agent_cfg.enabled {
-                strategy.reconcile_add(&hook_str)
+                let enabled = hook_status::enabled_events_for_agent(&cfg, strategy.agent_id());
+                let enabled_refs: Vec<&str> = enabled.iter().map(|s| s.as_str()).collect();
+                strategy.reconcile_add(&hook_str, &enabled_refs)
             } else {
                 strategy.reconcile_remove()
             };

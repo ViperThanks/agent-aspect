@@ -1,9 +1,10 @@
-// hooks.js — Hook 配置状态展示和开关控制
+// hooks.js — Hook 配置矩阵视图：agent × event 级别展示和控制
 //
 // 职责：
-// - 加载并渲染全局和 per-agent hook 配置状态
-// - 提供 toggle 开关控制全局 pretooluse 和 agent 开关
-// - 提供 reconcile 按钮
+// - 加载并渲染全局 hook 配置 + per-agent event 矩阵表
+// - 矩阵行展示每个 (agent, event) 的 phase/installed/required/blocking 状态
+// - 提供 toggle 开关控制全局 pretooluse 和 agent enabled
+// - 提供 reconcile 按钮（全局和 per-agent）
 
 async function loadHooks() {
   const view = document.getElementById('hooks-view');
@@ -11,8 +12,7 @@ async function loadHooks() {
   view.innerHTML = '<div class="skeleton" style="height:200px"></div>';
 
   try {
-    const res = await api('/hook-status');
-    const data = await res.json();
+    const data = await api('/hook-status');
     S.hooks = data;
     renderHooks();
   } catch (e) {
@@ -20,14 +20,33 @@ async function loadHooks() {
   }
 }
 
+// 阶段 badge 颜色映射
+var PHASE_STYLES = {
+  before: 'badge-blue',
+  permission: 'badge-yellow',
+  after: 'badge-green',
+  session: 'badge-purple',
+  prompt: 'badge-purple',
+  turn_end: 'badge-gray'
+};
+
+var PHASE_LABELS = {
+  before: 'before',
+  permission: 'permission',
+  after: 'after',
+  session: 'session',
+  prompt: 'prompt',
+  turn_end: 'turn_end'
+};
+
 function renderHooks() {
-  const view = document.getElementById('hooks-view');
+  var view = document.getElementById('hooks-view');
   if (!view || !S.hooks) return;
 
-  const g = S.hooks.global;
-  const agents = S.hooks.agents || [];
+  var g = S.hooks.global || {};
+  var agents = S.hooks.agents || [];
 
-  let html = '<div class="section">';
+  var html = '<div class="section">';
 
   // 全局 PreToolUse 评估开关
   html += '<div class="card">';
@@ -35,69 +54,100 @@ function renderHooks() {
   html += '<div class="card-body">';
   html += '<div class="setting-row">';
   html += '<span class="setting-label">Global PreToolUse Evaluation</span>';
-  html += `<button class="btn btn-sm ${g.pretooluse_enabled ? 'btn-success' : 'btn-secondary'}" onclick="toggleGlobalPretooluse()">${g.pretooluse_enabled ? 'ON' : 'OFF'}</button>`;
+  html += '<button class="btn btn-sm ' + (g.pretooluse_enabled ? 'btn-success' : 'btn-secondary') + '" onclick="toggleGlobalPretooluse()">' + (g.pretooluse_enabled ? 'ON' : 'OFF') + '</button>';
   html += '</div>';
   html += '<div class="setting-detail">';
-  html += `<span class="monospace">${escHtml(g.config_path || '')}</span>`;
+  html += '<span class="monospace">' + escHtml(g.config_path || '') + '</span>';
   if (g.hook_binary_path) {
-    html += `<br><span class="monospace">${escHtml(g.hook_binary_path)}</span>`;
+    html += '<br><span class="monospace">' + escHtml(g.hook_binary_path) + '</span>';
   }
   html += '</div>';
   html += '</div></div>';
 
-  // Agent 行
-  for (const agent of agents) {
-    const statusBadge = renderHookStatusBadge(agent.status);
-    html += '<div class="card">';
-    html += '<div class="card-header">';
-    html += `<h3>${escHtml(agent.label)}</h3>`;
-    html += ` ${statusBadge}`;
+  // Agent × Event 矩阵表
+  for (var ai = 0; ai < agents.length; ai++) {
+    var agent = agents[ai];
+    var statusBadge = renderHookStatusBadge(agent.status);
+    var details = agent.event_details || [];
+
+    html += '<div class="card" style="margin-bottom:12px">';
+
+    // Agent 头部行：label + status badge + legacy warning + enabled toggle
+    html += '<div class="card-header" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">';
+    html += '<h3 style="margin:0">' + escHtml(agent.label || agent.agent) + '</h3> ';
+    html += statusBadge;
+    if (agent.legacy_present) {
+      html += ' <span class="badge badge-warn" title="Legacy hook entries found">⚠ Legacy</span>';
+    }
+    html += '<span style="flex:1"></span>';
+    html += '<span class="setting-label" style="font-size:12px">Enabled</span> ';
+    html += '<button class="btn btn-sm ' + (agent.enabled ? 'btn-success' : 'btn-secondary') + '" onclick="toggleAgent(\'' + agent.agent + '\',\'enabled\',' + !agent.enabled + ')">' + (agent.enabled ? 'ON' : 'OFF') + '</button>';
     html += '</div>';
+
     html += '<div class="card-body">';
 
-    // 开关行
-    html += '<div class="setting-row">';
-    html += '<span class="setting-label">Enabled</span>';
-    html += `<button class="btn btn-sm ${agent.enabled ? 'btn-success' : 'btn-secondary'}" onclick="toggleAgent('${agent.agent}','enabled',${!agent.enabled})">${agent.enabled ? 'ON' : 'OFF'}</button>`;
-    html += '</div>';
+    // 矩阵表
+    if (details.length > 0) {
+      html += '<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:8px">';
+      html += '<thead><tr style="border-bottom:1px solid var(--border,#333);text-align:left">';
+      html += '<th style="padding:4px 8px">Event</th>';
+      html += '<th style="padding:4px 8px">阶段</th>';
+      html += '<th style="padding:4px 8px;text-align:center">已安装</th>';
+      html += '<th style="padding:4px 8px;text-align:center">配置</th>';
+      html += '<th style="padding:4px 8px;text-align:center">必需</th>';
+      html += '<th style="padding:4px 8px;text-align:center">阻断</th>';
+      html += '</tr></thead>';
+      html += '<tbody>';
 
-    html += '<div class="setting-row">';
-    html += '<span class="setting-label">PreToolUse</span>';
-    html += `<button class="btn btn-sm ${agent.pretooluse_enabled ? 'btn-success' : 'btn-secondary'}" onclick="toggleAgent('${agent.agent}','pretooluse_enabled',${!agent.pretooluse_enabled})">${agent.pretooluse_enabled ? 'ON' : 'OFF'}</button>`;
-    html += '</div>';
+      for (var di = 0; di < details.length; di++) {
+        var d = details[di];
+        var phaseStyle = PHASE_STYLES[d.phase] || 'badge-gray';
+        var phaseLabel = PHASE_LABELS[d.phase] || d.phase || '—';
+        var installedIcon = d.installed
+          ? '<span style="color:#22c55e">✓</span>'
+          : '<span style="color:#ef4444">✗</span>';
+        var configToggle = '<button class="btn btn-sm ' + (d.config_enabled ? 'btn-success' : 'btn-secondary') + '" onclick="toggleEvent(\'' + agent.agent + '\',\'' + (d.event || '') + '\',' + !d.config_enabled + ')">' + (d.config_enabled ? 'ON' : 'OFF') + '</button>';
+        var requiredText = d.required ? 'Yes' : '—';
+        var blockingText = d.blocking ? 'Yes' : '—';
 
-    html += '<div class="setting-row">';
-    html += '<span class="setting-label">Metadata</span>';
-    html += `<button class="btn btn-sm ${agent.metadata_enabled ? 'btn-success' : 'btn-secondary'}" onclick="toggleAgent('${agent.agent}','metadata_enabled',${!agent.metadata_enabled})">${agent.metadata_enabled ? 'ON' : 'OFF'}</button>`;
-    html += '</div>';
+        html += '<tr style="border-bottom:1px solid var(--border-subtle,#222)">';
+        html += '<td style="padding:4px 8px"><span class="monospace" style="font-size:12px">' + escHtml(d.event || '') + '</span></td>';
+        html += '<td style="padding:4px 8px"><span class="badge ' + phaseStyle + '" style="font-size:11px">' + escHtml(phaseLabel) + '</span></td>';
+        html += '<td style="padding:4px 8px;text-align:center">' + installedIcon + '</td>';
+        html += '<td style="padding:4px 8px;text-align:center">' + configToggle + '</td>';
+        html += '<td style="padding:4px 8px;text-align:center">' + requiredText + '</td>';
+        html += '<td style="padding:4px 8px;text-align:center">' + blockingText + '</td>';
+        html += '</tr>';
+      }
 
-    html += '<div class="setting-row">';
-    html += '<span class="setting-label">Stop</span>';
-    html += `<button class="btn btn-sm ${agent.stop_enabled ? 'btn-success' : 'btn-secondary'}" onclick="toggleAgent('${agent.agent}','stop_enabled',${!agent.stop_enabled})">${agent.stop_enabled ? 'ON' : 'OFF'}</button>`;
-    html += '</div>';
+      html += '</tbody></table>';
+    } else {
+      // fallback：无 event_details 时显示旧格式
+      if (agent.installed_events && agent.installed_events.length > 0) {
+        html += '<div style="font-size:12px;color:var(--text-muted,#888)">已安装: ' + agent.installed_events.join(', ') + '</div>';
+      }
+      if (agent.missing_events && agent.missing_events.length > 0) {
+        html += '<div style="font-size:12px" class="text-warn">缺失: ' + agent.missing_events.join(', ') + '</div>';
+      }
+    }
 
-    // 配置路径
-    html += '<div class="setting-detail">';
-    html += `<span class="monospace">${escHtml(agent.config_path || '')} ${agent.config_exists ? '(exists)' : '(missing)'}</span>`;
+    // 配置路径（折叠）
+    html += '<details style="margin-top:6px;font-size:12px;color:var(--text-muted,#888)">';
+    html += '<summary style="cursor:pointer">配置路径</summary>';
+    html += '<div style="margin-top:4px" class="monospace">' + escHtml(agent.config_path || '') + ' ' + (agent.config_exists ? '(exists)' : '(missing)') + '</div>';
     if (agent.commands && agent.commands.length > 0) {
-      html += `<br><span class="monospace">${escHtml(agent.commands[0])}</span>`;
+      html += '<div style="margin-top:2px" class="monospace">' + escHtml(agent.commands[0]) + '</div>';
     }
-    if (agent.installed_events && agent.installed_events.length > 0) {
-      html += `<br>Installed: ${agent.installed_events.join(', ')}`;
-    }
-    if (agent.missing_events && agent.missing_events.length > 0) {
-      html += `<br><span class="text-warn">Missing: ${agent.missing_events.join(', ')}</span>`;
-    }
-    html += '</div>';
+    html += '</details>';
 
     html += '</div></div>';
   }
 
-  // Reconcile 按钮
+  // 全局 Reconcile 按钮
   html += '<div class="card">';
   html += '<div class="card-body">';
   html += '<button class="btn btn-primary" onclick="reconcileHooks()">Reconcile Hooks</button>';
-  html += '<span class="setting-hint">Add/remove hook entries per current config</span>';
+  html += '<span class="setting-hint" style="margin-left:8px">同步所有 agent hook 配置到当前状态</span>';
   html += '</div></div>';
 
   html += '</div>';
@@ -111,19 +161,19 @@ function renderHookStatusBadge(status) {
     case 'partial': return '<span class="badge badge-warn">Partial</span>';
     case 'missing_config': return '<span class="badge badge-error">No Config</span>';
     case 'missing_hook_binary': return '<span class="badge badge-error">No Binary</span>';
-    default: return `<span class="badge">${escHtml(status)}</span>`;
+    default: return '<span class="badge">' + escHtml(status || '') + '</span>';
   }
 }
 
 async function toggleGlobalPretooluse() {
   if (!S.hooks) return;
-  const newVal = !S.hooks.global.pretooluse_enabled;
+  var newVal = !S.hooks.global.pretooluse_enabled;
   try {
-    const res = await api('/hook-config', {
+    var res = await api('/hook-config', {
       method: 'POST',
       body: JSON.stringify({ pretooluse_enabled: newVal })
     });
-    if (res.ok) {
+    if (res && !res.error) {
       S.hooks.global.pretooluse_enabled = newVal;
       renderHooks();
     }
@@ -132,14 +182,14 @@ async function toggleGlobalPretooluse() {
 
 async function toggleAgent(agent, field, value) {
   try {
-    const agents = {};
+    var agents = {};
     agents[agent] = {};
     agents[agent][field] = value;
-    const res = await api('/hook-config', {
+    var res = await api('/hook-config', {
       method: 'POST',
-      body: JSON.stringify({ agents })
+      body: JSON.stringify({ agents: agents })
     });
-    if (res.ok) {
+    if (res && !res.error) {
       // Reload full status
       await loadHooks();
     }
@@ -148,17 +198,31 @@ async function toggleAgent(agent, field, value) {
 
 async function reconcileHooks() {
   try {
-    const res = await api('/hook-config', {
+    var res = await api('/hook-config', {
       method: 'POST',
       body: JSON.stringify({ reconcile: true })
     });
-    if (res.ok) {
-      const data = await res.json();
+    if (res && !res.error) {
       await loadHooks();
-      if (data.reconcile_reports) {
-        let msg = data.reconcile_reports.map(r => `${r.agent}: ${r.action}`).join('\n');
+      if (res.reconcile_reports) {
+        var msg = res.reconcile_reports.map(function(r) { return r.agent + ': ' + r.action; }).join('\n');
         alert('Reconcile result:\n' + msg);
       }
+    }
+  } catch (e) { /* ignore */ }
+}
+
+async function toggleEvent(agent, event, value) {
+  try {
+    var agents = {};
+    agents[agent] = { events: {} };
+    agents[agent].events[event] = { enabled: value };
+    var res = await api('/hook-config', {
+      method: 'POST',
+      body: JSON.stringify({ agents: agents })
+    });
+    if (res && !res.error) {
+      await loadHooks();
     }
   } catch (e) { /* ignore */ }
 }

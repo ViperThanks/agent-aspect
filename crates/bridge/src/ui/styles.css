@@ -380,6 +380,8 @@ html,body{height:100%;font-family:var(--font-system);background:var(--bg);color:
 .kind-btn.active{background:var(--accent-bg);border-color:var(--accent);color:var(--text)}
 
 	.job-status-bar{display:flex;align-items:center;gap:10px;padding:14px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:14px;box-shadow:var(--shadow-sm)}
+	.job-completed-reason{font-size:.72rem;color:var(--dim);font-style:italic}
+	.job-completed-reason.hidden{display:none}
 	.job-cancel{padding:6px 14px;background:var(--red-bg);color:var(--red-text);border:none;border-radius:6px;font-size:.75rem;font-weight:600;cursor:pointer;margin-left:auto}
 	.job-raw-details{border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2);overflow:hidden;display:flex;flex-direction:column;max-height:50vh}
 	.job-raw-details summary{cursor:pointer;padding:10px 12px;color:var(--dim);font-size:.78rem;font-weight:700;user-select:none;flex-shrink:0}

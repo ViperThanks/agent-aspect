@@ -5,7 +5,7 @@
 //! `AgentId::adapter()` 按枚举变体返回对应实现。
 
 use crate::error::AgentAspectResult;
-use crate::event::{AgentId, UnifiedEvent};
+use crate::event::{AgentId, LifecycleEvent, UnifiedEvent};
 use crate::wire::HookResponse;
 
 /// Contract for integrating a new AI agent into Agent Aspect.
@@ -53,6 +53,35 @@ pub trait AgentAdapter: Send + Sync {
         action: crate::decision::Action,
         note: String,
     ) -> Option<HookResponse>;
+
+    /// 该 agent 支持的所有 lifecycle events。
+    ///
+    /// 默认返回 4 个通用事件（PreToolUse/SessionStart/UserPromptSubmit/Stop），
+    /// 个别 agent（如 Codex CLI）通过覆写扩展为全部 6 个。
+    fn supported_events(&self) -> &'static [LifecycleEvent] {
+        &[
+            LifecycleEvent::PreToolUse,
+            LifecycleEvent::SessionStart,
+            LifecycleEvent::UserPromptSubmit,
+            LifecycleEvent::Stop,
+        ]
+    }
+
+    /// 归一化任意 lifecycle event 的 payload。
+    ///
+    /// 默认只处理 PreToolUse（委托给 `normalize`），其余事件返回 `Ok(None)`。
+    /// 后续各 adapter 可按需覆写以处理 PostToolUse 等事件。
+    fn normalize_event(
+        &self,
+        event: LifecycleEvent,
+        raw_payload: &str,
+    ) -> AgentAspectResult<Option<UnifiedEvent>> {
+        if event == LifecycleEvent::PreToolUse {
+            self.normalize(raw_payload).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +134,18 @@ impl AgentAdapter for CodexCliAdapter {
         note: String,
     ) -> Option<HookResponse> {
         HookResponse::from_action_and_event(action, note, self.hook_event_name())
+    }
+
+    /// Codex CLI 支持全部 6 个 lifecycle events（含 PermissionRequest 和 PostToolUse）。
+    fn supported_events(&self) -> &'static [LifecycleEvent] {
+        &[
+            LifecycleEvent::PreToolUse,
+            LifecycleEvent::PermissionRequest,
+            LifecycleEvent::PostToolUse,
+            LifecycleEvent::SessionStart,
+            LifecycleEvent::UserPromptSubmit,
+            LifecycleEvent::Stop,
+        ]
     }
 }
 

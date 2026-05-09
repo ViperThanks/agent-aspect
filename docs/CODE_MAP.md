@@ -25,6 +25,7 @@
 | 文件 | 职责 |
 |------|------|
 | `PLAN.md` | 产品宪法：愿景、架构、阶段路线和事件模型 |
+| `plan-m47-completion-strategy-layer.md` | M47 完成判定策略层计划：PreToolUse 边缘化、stop hook / process exit / transcript scanner / timeout 统一成 completion signal |
 | `plan-m43-conversation-review-ux.md` | M43 会话审阅体验计划：选区残留修复、thinking 折叠结构化、审批 review payload 可配置化 |
 | `plan-m41-mac-shell.md` | M41 Mac Shell MVP 计划：SwiftUI + WKWebView 壳、Bridge 生命周期管理、诊断与打包路径 |
 | `relay-vps-tokyo.md` | Relay VPS 实际部署记录：vps-tokyo 上的 systemd/nginx/更新流程 |
@@ -43,6 +44,7 @@
 | `config.rs` | TOML 配置的加载、保存、默认值生成（含 AgentHookConfig per-agent 开关） |
 | `hook_status.rs` | Hook 状态读取模块：AgentHookStrategy trait + Claude/Codex/Kimi 三种实现 |
 | `event.rs` | 核心事件类型：UnifiedEvent / AgentId / Phase / Risk / Scope / ToolInput |
+| `lifecycle.rs` | CompletionSignal / CompletionPolicy：统一 stop hook、process exit、scanner timeout 的完成判定语义 |
 | `wire.rs` | 线路协议：hook 请求/响应/HookResponse 的数据结构 |
 | `adapter.rs` | Provider 适配器 trait 和 Claude/Codex/Kimi/Gemini 四个实现 |
 | `normalize.rs` | Provider hook payload 归一化为 UnifiedEvent |
@@ -55,6 +57,7 @@
 | `store/events.rs` | 事件 DAO：插入（含会话索引）、批量查询、过期清理 |
 | `store/feedback.rs` | 反馈 DAO：用户对裁决的 useful/noisy 反馈 |
 | `store/jobs.rs` | 任务 DAO：全生命周期管理 + 进程监控 + stale 恢复 |
+| `store/completion.rs` | Completion observer DAO：scanner cursor、deadline、authority 和完成信号持久化 |
 | `store/messages.rs` | 消息 DAO：增量缓存读写 + 同步状态管理 |
 | `store/suggestions.rs` | 建议规则 DAO：学习引擎生成的自动允许建议 |
 | `conversation.rs` | 会话管理：ID 生成（SHA-256）、元数据提取、标题推断 |
@@ -77,6 +80,8 @@
 | `context.rs` | 共享应用上下文（AuditStore + ProviderResolver 的容器） |
 | `routes.rs` | HTTP 路由处理器：全部 REST API（事件/会话/模式/决策/反馈/活动聚合 + hook-status/hook-config） |
 | `jobs.rs` | Job 编排（排队、执行、超时保护、SSE 日志流、崩溃恢复） |
+| `completion.rs` | Job 终态写入器：CompletionSignal → jobs.completed_reason / observer / SSE 的唯一收敛入口 |
+| `scanner.rs` | Transcript scanner 后台循环：按 byte cursor 扫描 observer，产生 delta/idle/timeout 观测状态 |
 | `provider.rs` | Provider CLI 命令构建（new/continue 由 conversation_id 判定） |
 | `relay_client.rs` | Relay WebSocket 客户端（后台线程代理手机请求到本地 Bridge） |
 | `sse.rs` | SSE 广播器（实时向浏览器推送事件） |
