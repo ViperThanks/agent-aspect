@@ -117,6 +117,15 @@ pub struct HookEventDetail {
     pub required: bool,
     /// 是否为阻断型事件。
     pub blocking: bool,
+    /// event-level decision strategy。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision_strategy: Option<String>,
+    /// event-level completion strategy。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_strategy: Option<String>,
+    /// event-level timeout strategy。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_strategy: Option<String>,
 }
 
 // ── Strategy trait ───────────────────────────────────────────────────
@@ -428,6 +437,10 @@ pub fn read_full_status(config: &Config, hook_binary: Option<&PathBuf>) -> HookG
             .iter()
             .filter(|spec| spec.supported_by(agent_id))
             .filter_map(|spec| {
+                let cfg = spec
+                    .agent_event_name(agent_id)
+                    .map(|name| agent_cfg.event_config(name))
+                    .unwrap_or_default();
                 spec.agent_event_name(agent_id).map(|name| HookEventDetail {
                     event: name.to_string(),
                     phase: spec.phase.to_string(),
@@ -435,6 +448,9 @@ pub fn read_full_status(config: &Config, hook_binary: Option<&PathBuf>) -> HookG
                     config_enabled: agent_cfg.is_event_enabled(name),
                     required: spec.required,
                     blocking: spec.blocking,
+                    decision_strategy: cfg.decision_strategy.map(|s| s.as_str().to_string()),
+                    completion_strategy: cfg.completion_strategy.map(|s| s.as_str().to_string()),
+                    timeout_strategy: cfg.timeout_strategy.map(|s| s.as_str().to_string()),
                 })
             })
             .collect();
@@ -1292,7 +1308,10 @@ mod tests {
         let mut agent_cfg = crate::config::AgentHookConfig::default();
         agent_cfg.events.insert(
             "Stop".to_string(),
-            crate::config::EventConfig { enabled: false },
+            crate::config::EventConfig {
+                enabled: false,
+                ..Default::default()
+            },
         );
         config
             .agent_hooks

@@ -15,12 +15,12 @@
 //! - 审计数据启动时执行 retention purge，防止数据库无限增长。
 
 use agent_aspect_core::audit::AuditStore;
-use agent_aspect_core::config::Config;
-use agent_aspect_core::decision::Action;
-use agent_aspect_core::event::AgentId;
+use agent_aspect_core::config::{Config, DecisionStrategy};
+use agent_aspect_core::decision::{Action, Decision};
+use agent_aspect_core::event::{AgentId, LifecycleEvent};
 use agent_aspect_core::normalize::{
     normalize_claude_pre_tool_use, normalize_codex_pre_tool_use, normalize_gemini_pre_tool_use,
-    normalize_kimi_pre_tool_use,
+    normalize_kimi_pre_tool_use, normalize_lifecycle_event,
 };
 use agent_aspect_core::paths;
 use agent_aspect_core::rule::{Mode, RuleEngine};
@@ -163,10 +163,19 @@ fn handle_client(mut stream: UnixStream, store: &AuditStore, engine: &RuleEngine
     match request {
         WireRequest::Evaluate {
             payload,
+            event,
             agent,
             device_id,
         } => {
-            dispatch_evaluate(&mut stream, &payload, agent, device_id, store, engine);
+            dispatch_evaluate(
+                &mut stream,
+                &payload,
+                event.unwrap_or(LifecycleEvent::PreToolUse),
+                agent,
+                device_id,
+                store,
+                engine,
+            );
         }
         WireRequest::Override {
             event_id,
@@ -202,6 +211,7 @@ fn handle_client(mut stream: UnixStream, store: &AuditStore, engine: &RuleEngine
 fn dispatch_evaluate(
     stream: &mut UnixStream,
     payload: &str,
+    hook_event: LifecycleEvent,
     agent: Option<AgentId>,
     device_id: Option<String>,
     store: &AuditStore,
@@ -213,7 +223,7 @@ fn dispatch_evaluate(
         log_info!("register device failed: {e}");
     }
 
-    // 三级开关判断：全局 → agent enabled → agent pretooluse
+    // 三级开关判断：全局 → agent enabled → agent event
     let cfg = Config::load(&Config::config_path()).unwrap_or_else(|_| Config::default_config());
     let agent_str = agent.as_ref().map(|a| a.as_str()).unwrap_or("claude_code");
 
@@ -240,24 +250,33 @@ fn dispatch_evaluate(
         return;
     }
 
-    if !agent_hook.is_event_enabled("PreToolUse") {
-        log_info!("agent {agent_str} PreToolUse disabled, allowing");
+    if !agent_hook.is_event_enabled(hook_event.as_str()) {
+        log_info!("agent {agent_str} {hook_event} disabled, allowing");
         let resp = WireResponse {
             event_id: None,
             action: Action::Allow,
-            note: "agent PreToolUse disabled".to_string(),
+            note: format!("agent {hook_event} disabled"),
         };
         write_wire_response(stream, &resp);
         return;
     }
 
-    // 根据 agent 类型选择对应的 payload 规范化函数
-    let normalize_fn = match agent {
-        Some(AgentId::CodexCli) => normalize_codex_pre_tool_use,
-        Some(AgentId::KimiCode) => normalize_kimi_pre_tool_use,
-        Some(AgentId::GeminiCli) => normalize_gemini_pre_tool_use,
-        Some(AgentId::ClaudeCode) | None => normalize_claude_pre_tool_use,
-        Some(other) => {
+    let agent_id = agent.unwrap_or(AgentId::ClaudeCode);
+    let normalized = match (hook_event, agent_id) {
+        (LifecycleEvent::PreToolUse, AgentId::CodexCli) => normalize_codex_pre_tool_use(payload),
+        (LifecycleEvent::PreToolUse, AgentId::KimiCode) => normalize_kimi_pre_tool_use(payload),
+        (LifecycleEvent::PreToolUse, AgentId::GeminiCli) => normalize_gemini_pre_tool_use(payload),
+        (LifecycleEvent::PreToolUse, AgentId::ClaudeCode) => normalize_claude_pre_tool_use(payload),
+        (LifecycleEvent::PermissionRequest, agent_id) => {
+            normalize_lifecycle_event(payload, agent_id, hook_event).and_then(|event| {
+                event.ok_or_else(|| {
+                    agent_aspect_core::error::AgentAspectError::UnsupportedHookEvent(
+                        hook_event.to_string(),
+                    )
+                })
+            })
+        }
+        (_, other) => {
             log_info!("unsupported agent: {other}, denying");
             let resp = WireResponse::deny(format!("unsupported agent: {other}"));
             write_wire_response(stream, &resp);
@@ -265,17 +284,25 @@ fn dispatch_evaluate(
         }
     };
 
-    match normalize_fn(payload) {
+    match normalized {
         Ok(event) => {
-            // 先运行静态规则引擎，再检查学习规则。
-            // 只有静态规则没有匹配且默认为 Allow 时，才查询学习规则。
-            let mut decision = engine.evaluate(&event);
-            if decision.rule_id.is_none() && decision.action == Action::Allow {
-                if let Ok(true) = store.has_learned_allow(event.agent.as_str(), &event.tool_name) {
-                    decision.rule_id = Some("[aspect-learned]".to_string());
-                    decision.note = "[aspect-learned] auto-allowed".to_string();
+            let event_cfg = agent_hook.event_config(hook_event.as_str());
+            let decision = if let Some(strategy) = event_cfg.decision_strategy {
+                decision_from_strategy(&event.id, hook_event, strategy)
+            } else {
+                // 先运行静态规则引擎，再检查学习规则。
+                // 只有静态规则没有匹配且默认为 Allow 时，才查询学习规则。
+                let mut decision = engine.evaluate(&event);
+                if decision.rule_id.is_none() && decision.action == Action::Allow {
+                    if let Ok(true) =
+                        store.has_learned_allow(event.agent.as_str(), &event.tool_name)
+                    {
+                        decision.rule_id = Some("[aspect-learned]".to_string());
+                        decision.note = "[aspect-learned] auto-allowed".to_string();
+                    }
                 }
-            }
+                decision
+            };
 
             // 审计写入：记录事件和判定结果（失败只记日志，不阻塞流程）
             if let Err(e) = store.insert_event(
@@ -312,6 +339,28 @@ fn dispatch_evaluate(
     }
 }
 
+/// 将 event-level decision_strategy 转成审计决策。
+fn decision_from_strategy(
+    event_id: &str,
+    hook_event: LifecycleEvent,
+    strategy: DecisionStrategy,
+) -> Decision {
+    let action = match strategy {
+        DecisionStrategy::Observe | DecisionStrategy::Allow => Action::Allow,
+        DecisionStrategy::Ask => Action::Ask,
+        DecisionStrategy::Deny => Action::Deny,
+    };
+    Decision {
+        event_id: event_id.to_string(),
+        action,
+        rule_id: Some("[aspect-hook-strategy]".to_string()),
+        note: format!(
+            "[aspect-hook-strategy] {hook_event} -> {}",
+            strategy.as_str()
+        ),
+    }
+}
+
 /// 分发 Metadata 请求：检查 per-agent metadata 开关，通过则调用 handle_metadata。
 ///
 /// 将 `WireRequest::Metadata` 匹配分支的开关判断逻辑提取为独立函数，保持行为不变。
@@ -340,6 +389,8 @@ fn dispatch_metadata(
             note: String::new(),
         };
         write_wire_response(stream, &resp);
+    } else if hook_event == "PostToolUse" {
+        handle_post_tool_use(payload, agent.as_ref(), store, stream);
     } else {
         handle_metadata(payload, agent.as_ref(), store, stream);
     }
@@ -451,6 +502,65 @@ fn handle_metadata(
         note: String::new(),
     };
     write_wire_response(stream, &resp);
+}
+
+/// 处理 PostToolUse：归一化为 after 事件并写入审计。
+fn handle_post_tool_use(
+    payload: &str,
+    agent: Option<&AgentId>,
+    store: &AuditStore,
+    stream: &mut UnixStream,
+) {
+    let agent_id = agent.copied().unwrap_or(AgentId::ClaudeCode);
+    match normalize_lifecycle_event(payload, agent_id, LifecycleEvent::PostToolUse) {
+        Ok(Some(event)) => {
+            if let Err(e) = store.insert_event(
+                &event.id,
+                event.phase.as_str(),
+                &event.event_type,
+                event.agent.as_str(),
+                &event.tool_name,
+                event.tool_input.file_path.as_deref(),
+                &event.timestamp,
+                payload,
+            ) {
+                log_info!("posttooluse audit event failed: {e}");
+            }
+            if let Err(e) = store.insert_decision_for_device(
+                &event.id,
+                Action::Log.as_str(),
+                Some("[aspect-posttooluse]"),
+                "[aspect-posttooluse] observed",
+                &chrono::Utc::now().to_rfc3339(),
+                Some("local-hook"),
+            ) {
+                log_info!("posttooluse audit decision failed: {e}");
+            }
+            let resp = WireResponse {
+                event_id: Some(event.id),
+                action: Action::Allow,
+                note: String::new(),
+            };
+            write_wire_response(stream, &resp);
+        }
+        Ok(None) => {
+            let resp = WireResponse {
+                event_id: None,
+                action: Action::Allow,
+                note: String::new(),
+            };
+            write_wire_response(stream, &resp);
+        }
+        Err(e) => {
+            log_info!("posttooluse normalize failed: {e}");
+            let resp = WireResponse {
+                event_id: None,
+                action: Action::Allow,
+                note: format!("posttooluse ignored: {e}"),
+            };
+            write_wire_response(stream, &resp);
+        }
+    }
 }
 
 /// 处理 Stop hook：找到对应 running job 并写入 stop_requested_at marker。

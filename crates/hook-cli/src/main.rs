@@ -15,7 +15,7 @@
 //! - 交互模式通过 /dev/tty 读取用户输入，不占用 stdin（stdin 被 hook payload 使用）。
 
 use agent_aspect_core::decision::Action;
-use agent_aspect_core::event::AgentId;
+use agent_aspect_core::event::{AgentId, LifecycleEvent};
 use agent_aspect_core::paths;
 use agent_aspect_core::wire::{HookResponse, WireRequest, WireResponse};
 use std::fs::File;
@@ -57,6 +57,15 @@ fn main() {
         // 工具使用审核路径：需要规则判定
         WireRequest::Evaluate {
             payload,
+            event: Some(LifecycleEvent::PreToolUse),
+            agent: Some(agent),
+            device_id: Some("local-hook".to_string()),
+        }
+    } else if hook_event == "PermissionRequest" {
+        // 权限请求路径：需要同步策略判定
+        WireRequest::Evaluate {
+            payload,
+            event: Some(LifecycleEvent::PermissionRequest),
             agent: Some(agent),
             device_id: Some("local-hook".to_string()),
         }
@@ -111,14 +120,19 @@ fn main() {
                 return;
             }
 
+            let response_event = match &request {
+                WireRequest::Evaluate { event: Some(e), .. } => e.as_str(),
+                _ => "PreToolUse",
+            };
             if interactive {
                 handle_interactive(
                     internal.action,
                     &internal.note,
                     internal.event_id.as_deref(),
+                    response_event,
                 );
             } else {
-                emit_hook_response(internal.action, &internal.note);
+                emit_hook_response_for_event(internal.action, &internal.note, response_event);
             }
         }
         Err(e) => {
@@ -217,7 +231,12 @@ fn detect_agent(payload: &str) -> AgentId {
 /// 三种 agent（Claude Code、Codex CLI、Kimi Code）都接受相同的 JSON 格式，
 /// 无需按 agent 分支。
 fn emit_hook_response(action: Action, note: &str) {
-    if let Some(out) = HookResponse::from_action(action, note.to_string()) {
+    emit_hook_response_for_event(action, note, "PreToolUse");
+}
+
+/// 向 stdout 输出指定 hook event name 的响应。
+fn emit_hook_response_for_event(action: Action, note: &str, event_name: &'static str) {
+    if let Some(out) = HookResponse::from_action_and_event(action, note.to_string(), event_name) {
         match serde_json::to_string(&out) {
             Ok(body) => println!("{body}"),
             Err(e) => eprintln!("agent-aspect-hook: hook response serialize failed: {e}"),
@@ -232,7 +251,12 @@ fn emit_hook_response(action: Action, note: &str) {
 /// - Ask：询问是否允许，否决则覆盖为 Deny。
 ///
 /// 覆盖操作通过 Override 请求发送给 daemon 记录审计日志。
-fn handle_interactive(action: Action, note: &str, event_id: Option<&str>) {
+fn handle_interactive(
+    action: Action,
+    note: &str,
+    event_id: Option<&str>,
+    event_name: &'static str,
+) {
     match action {
         Action::Allow => {
             println!("[agent-aspect] allowed.");
@@ -250,7 +274,7 @@ fn handle_interactive(action: Action, note: &str, event_id: Option<&str>) {
                 println!("[agent-aspect] overridden to allow.");
             } else {
                 // 保持 deny，审计已记录原始判定
-                emit_hook_response(Action::Deny, note);
+                emit_hook_response_for_event(Action::Deny, note, event_name);
             }
         }
         Action::Ask => {
@@ -271,7 +295,7 @@ fn handle_interactive(action: Action, note: &str, event_id: Option<&str>) {
                     Action::Deny,
                     "user rejected: ask -> deny",
                 );
-                emit_hook_response(Action::Deny, note);
+                emit_hook_response_for_event(Action::Deny, note, event_name);
             }
         }
         _ => {

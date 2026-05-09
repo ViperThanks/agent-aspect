@@ -54,6 +54,8 @@ pub enum LifecycleEvent {
     UserPromptSubmit,
     /// 停止 — agent 会话结束时触发。
     Stop,
+    /// Transcript scanner 合成事件 — 非 agent hook，用于完成判定和超时策略。
+    ScannerSynthetic,
 }
 
 impl LifecycleEvent {
@@ -66,6 +68,7 @@ impl LifecycleEvent {
             Self::SessionStart => "SessionStart",
             Self::UserPromptSubmit => "UserPromptSubmit",
             Self::Stop => "Stop",
+            Self::ScannerSynthetic => "ScannerSynthetic",
         }
     }
 
@@ -95,6 +98,7 @@ impl FromStr for LifecycleEvent {
             "SessionStart" => Ok(Self::SessionStart),
             "UserPromptSubmit" => Ok(Self::UserPromptSubmit),
             "Stop" => Ok(Self::Stop),
+            "ScannerSynthetic" => Ok(Self::ScannerSynthetic),
             _ => Err(format!("unknown lifecycle event: {s}")),
         }
     }

@@ -11,6 +11,69 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+/// Hook 阻断事件的决策策略。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionStrategy {
+    Observe,
+    Allow,
+    Ask,
+    Deny,
+}
+
+impl DecisionStrategy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Observe => "observe",
+            Self::Allow => "allow",
+            Self::Ask => "ask",
+            Self::Deny => "deny",
+        }
+    }
+}
+
+/// 完成判定信号的启用策略。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CompletionStrategy {
+    StopHook,
+    ProcessExit,
+    TranscriptIdle,
+    HardDeadline,
+}
+
+impl CompletionStrategy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::StopHook => "stop_hook",
+            Self::ProcessExit => "process_exit",
+            Self::TranscriptIdle => "transcript_idle",
+            Self::HardDeadline => "hard_deadline",
+        }
+    }
+}
+
+/// 超时后的处理策略。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimeoutStrategy {
+    MarkObserving,
+    MarkFailed,
+    Retry,
+    Fallback,
+}
+
+impl TimeoutStrategy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MarkObserving => "mark_observing",
+            Self::MarkFailed => "mark_failed",
+            Self::Retry => "retry",
+            Self::Fallback => "fallback",
+        }
+    }
+}
+
 /// Per-event 配置 — 控制单个 lifecycle event 的启停。
 ///
 /// 用于 `AgentHookConfig::events` map 中，key 是 LifecycleEvent 名称（如 "PreToolUse"）。
@@ -19,11 +82,22 @@ use std::path::Path;
 pub struct EventConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_strategy: Option<DecisionStrategy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_strategy: Option<CompletionStrategy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_strategy: Option<TimeoutStrategy>,
 }
 
 impl Default for EventConfig {
     fn default() -> Self {
-        Self { enabled: true }
+        Self {
+            enabled: true,
+            decision_strategy: None,
+            completion_strategy: None,
+            timeout_strategy: None,
+        }
     }
 }
 
@@ -80,6 +154,11 @@ impl AgentHookConfig {
             "Stop" => self.stop_enabled,
             _ => true,
         }
+    }
+
+    /// 读取单事件完整配置，缺省时返回默认配置。
+    pub fn event_config(&self, event_name: &str) -> EventConfig {
+        self.events.get(event_name).cloned().unwrap_or_default()
     }
 }
 
@@ -266,5 +345,37 @@ impl Config {
             eprintln!("agent-aspect: config save error: {e}");
         }
         cfg
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_config_v2_toml_parses() {
+        let raw = r#"
+enabled = true
+decision_strategy = "ask"
+completion_strategy = "stop_hook"
+timeout_strategy = "mark_failed"
+"#;
+        let cfg: EventConfig = toml::from_str(raw).unwrap();
+
+        assert!(cfg.enabled);
+        assert_eq!(cfg.decision_strategy, Some(DecisionStrategy::Ask));
+        assert_eq!(cfg.completion_strategy, Some(CompletionStrategy::StopHook));
+        assert_eq!(cfg.timeout_strategy, Some(TimeoutStrategy::MarkFailed));
+    }
+
+    #[test]
+    fn agent_hook_event_config_defaults_when_missing() {
+        let cfg = AgentHookConfig::default();
+        let event_cfg = cfg.event_config("PermissionRequest");
+
+        assert!(event_cfg.enabled);
+        assert_eq!(event_cfg.decision_strategy, None);
+        assert_eq!(event_cfg.completion_strategy, None);
+        assert_eq!(event_cfg.timeout_strategy, None);
     }
 }

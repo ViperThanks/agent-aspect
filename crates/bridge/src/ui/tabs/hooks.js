@@ -94,6 +94,7 @@ function renderHooks() {
       html += '<th style="padding:4px 8px">阶段</th>';
       html += '<th style="padding:4px 8px;text-align:center">已安装</th>';
       html += '<th style="padding:4px 8px;text-align:center">配置</th>';
+      html += '<th style="padding:4px 8px">策略</th>';
       html += '<th style="padding:4px 8px;text-align:center">必需</th>';
       html += '<th style="padding:4px 8px;text-align:center">阻断</th>';
       html += '</tr></thead>';
@@ -107,6 +108,11 @@ function renderHooks() {
           ? '<span style="color:#22c55e">✓</span>'
           : '<span style="color:#ef4444">✗</span>';
         var configToggle = '<button class="btn btn-sm ' + (d.config_enabled ? 'btn-success' : 'btn-secondary') + '" onclick="toggleEvent(\'' + agent.agent + '\',\'' + (d.event || '') + '\',' + !d.config_enabled + ')">' + (d.config_enabled ? 'ON' : 'OFF') + '</button>';
+        var strategyText = [
+          d.decision_strategy ? 'decision=' + d.decision_strategy : '',
+          d.completion_strategy ? 'completion=' + d.completion_strategy : '',
+          d.timeout_strategy ? 'timeout=' + d.timeout_strategy : ''
+        ].filter(Boolean).join(' · ') || 'default';
         var requiredText = d.required ? 'Yes' : '—';
         var blockingText = d.blocking ? 'Yes' : '—';
 
@@ -115,6 +121,7 @@ function renderHooks() {
         html += '<td style="padding:4px 8px"><span class="badge ' + phaseStyle + '" style="font-size:11px">' + escHtml(phaseLabel) + '</span></td>';
         html += '<td style="padding:4px 8px;text-align:center">' + installedIcon + '</td>';
         html += '<td style="padding:4px 8px;text-align:center">' + configToggle + '</td>';
+        html += '<td style="padding:4px 8px"><span class="monospace" style="font-size:11px;color:var(--dim)">' + escHtml(strategyText) + '</span></td>';
         html += '<td style="padding:4px 8px;text-align:center">' + requiredText + '</td>';
         html += '<td style="padding:4px 8px;text-align:center">' + blockingText + '</td>';
         html += '</tr>';

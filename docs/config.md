@@ -165,6 +165,27 @@ All fields are optional. Unset fields inherit the built-in default for that prov
 
 Permission passthrough fields are currently verified for Claude Code only. Other providers (Codex CLI, Kimi Code) default to disabled.
 
+## Hook Strategy Config v2
+
+Per-agent event config can carry strategy fields. Unset strategy fields keep the current default behavior.
+
+```toml
+[agent_hooks.codex_cli.events.PermissionRequest]
+enabled = true
+decision_strategy = "ask"          # observe | allow | ask | deny
+
+[agent_hooks.codex_cli.events.PostToolUse]
+enabled = true
+decision_strategy = "observe"
+
+[agent_hooks.claude_code.events.Stop]
+enabled = true
+completion_strategy = "stop_hook"  # stop_hook | process_exit | transcript_idle | hard_deadline
+timeout_strategy = "mark_failed"   # mark_observing | mark_failed | retry | fallback
+```
+
+`PermissionRequest` is blocking and is evaluated through the daemon. `PostToolUse` is non-blocking and is recorded as an audit observation.
+
 ## Environment Variables
 
 | Variable | Effect |

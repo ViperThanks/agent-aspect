@@ -4,7 +4,7 @@
 //! 四种请求类型：Evaluate（规则评估）、Override（人工覆盖）、Metadata（会话元数据）、Stop（停止信号）。
 
 use crate::decision::{Action, Decision};
-use crate::event::AgentId;
+use crate::event::{AgentId, LifecycleEvent};
 use serde::{Deserialize, Serialize};
 
 /// Claude Code hook 原始 payload — 其他 provider（Codex/Kimi/Gemini）也复用此结构。
@@ -22,6 +22,8 @@ pub struct ClaudeHookPayload {
 pub enum WireRequest {
     Evaluate {
         payload: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        event: Option<LifecycleEvent>,
         #[serde(skip_serializing_if = "Option::is_none")]
         agent: Option<AgentId>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -129,5 +131,26 @@ impl HookResponse {
             }),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn permission_request_response_keeps_event_name() {
+        let response =
+            HookResponse::from_action_and_event(Action::Ask, "needs approval", "PermissionRequest")
+                .unwrap();
+
+        assert_eq!(
+            response.hook_specific_output.hook_event_name,
+            "PermissionRequest"
+        );
+        assert_eq!(
+            response.hook_specific_output.permission_decision,
+            Action::Ask
+        );
     }
 }

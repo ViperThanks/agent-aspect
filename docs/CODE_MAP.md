@@ -44,14 +44,14 @@
 | `constants.rs` | 集中常量：分页上限、截断长度、聚合窗口 |
 | `utils.rs` | 通用工具：Unicode 字符截断 + Claude 项目目录解析 |
 | `paths.rs` | File system paths: all standard locations under `~/.agent-aspect/` + `hook_binary_path()` |
-| `config.rs` | TOML 配置的加载、保存、默认值生成（含 AgentHookConfig per-agent 开关） |
+| `config.rs` | TOML 配置的加载、保存、默认值生成（含 AgentHookConfig per-agent/event strategy 开关） |
 | `hook_status.rs` | Hook 状态读取模块：AgentHookStrategy trait + Claude/Codex/Kimi 三种实现 |
 | `event.rs` | 核心事件类型：UnifiedEvent / AgentId / Phase / Risk / Scope / ToolInput |
 | `lifecycle.rs` | CompletionSignal / CompletionPolicy：统一 stop hook、process exit、scanner timeout 的完成判定语义 |
-| `wire.rs` | 线路协议：hook 请求/响应/HookResponse 的数据结构 |
+| `wire.rs` | 线路协议：hook 请求/响应/HookResponse 的数据结构（Evaluate 携带 lifecycle event） |
 | `provider_registry.rs` | Provider capability registry：内置 provider 默认能力、TOML override、UI/runner 共享 capability 视图 |
 | `adapter.rs` | Provider 适配器 trait 和 Claude/Codex/Kimi/Gemini 四个实现 |
-| `normalize.rs` | Provider hook payload 归一化为 UnifiedEvent |
+| `normalize.rs` | Provider hook payload 归一化为 UnifiedEvent（PreToolUse / PermissionRequest / PostToolUse） |
 | `provider_resolver.rs` | Provider CLI 二进制发现（配置 > PATH > fallback 目录） |
 | `audit.rs` | SQLite 审计存储 facade + schema 迁移 |
 | `store/mod.rs` | DAO 层模块入口，按领域拆分 |

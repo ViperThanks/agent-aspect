@@ -3166,11 +3166,42 @@ pub fn handle_post_hook_config(
             // per-agent per-event 开关：{ "agents": { "claude_code": { "events": { "PreToolUse": { "enabled": true } } } } }
             if let Some(events) = patch.get("events").and_then(|v| v.as_object()) {
                 for (event_name, event_cfg) in events {
+                    let current = entry.events.entry(event_name.clone()).or_default();
                     if let Some(enabled) = event_cfg.get("enabled").and_then(|v| v.as_bool()) {
-                        entry.events.insert(
-                            event_name.clone(),
-                            agent_aspect_core::config::EventConfig { enabled },
-                        );
+                        current.enabled = enabled;
+                    }
+                    if let Some(v) = event_cfg.get("decision_strategy") {
+                        match serde_json::from_value(v.clone()) {
+                            Ok(strategy) => current.decision_strategy = Some(strategy),
+                            Err(_) => {
+                                return json_response(
+                                    400,
+                                    &serde_json::json!({"error": format!("invalid decision_strategy for {event_name}")}),
+                                );
+                            }
+                        }
+                    }
+                    if let Some(v) = event_cfg.get("completion_strategy") {
+                        match serde_json::from_value(v.clone()) {
+                            Ok(strategy) => current.completion_strategy = Some(strategy),
+                            Err(_) => {
+                                return json_response(
+                                    400,
+                                    &serde_json::json!({"error": format!("invalid completion_strategy for {event_name}")}),
+                                );
+                            }
+                        }
+                    }
+                    if let Some(v) = event_cfg.get("timeout_strategy") {
+                        match serde_json::from_value(v.clone()) {
+                            Ok(strategy) => current.timeout_strategy = Some(strategy),
+                            Err(_) => {
+                                return json_response(
+                                    400,
+                                    &serde_json::json!({"error": format!("invalid timeout_strategy for {event_name}")}),
+                                );
+                            }
+                        }
                     }
                 }
             }
