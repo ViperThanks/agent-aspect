@@ -137,6 +137,11 @@ command = "claude"
 display_name = "Claude Code"
 supports_resume = true
 supports_new = true
+supports_pretooluse = true
+supports_posttooluse = false
+supports_stop = true
+supports_transcript = true
+supports_native_timeout = false
 ```
 
 All fields are optional. Unset fields inherit the built-in default for that provider.
@@ -149,6 +154,11 @@ All fields are optional. Unset fields inherit the built-in default for that prov
 | `supports_resume` | bool | Whether the provider supports resuming sessions. |
 | `supports_new` | bool | Whether the provider supports creating new sessions. |
 | `supports_stop_observer` | bool | Whether the provider supports stopping observer sessions. |
+| `supports_pretooluse` | bool | Whether the provider supports before-tool hook events. |
+| `supports_posttooluse` | bool | Whether the provider supports after-tool hook events. |
+| `supports_stop` | bool | Whether the provider supports stop/turn-end lifecycle events. |
+| `supports_transcript` | bool | Whether Agent Aspect can read transcripts for this provider. |
+| `supports_native_timeout` | bool | Whether the provider exposes native timeout control. |
 | `supports_permission_passthrough` | bool | Whether the provider can inherit a runtime permission mode. Default: `false` |
 | `permission_mode_cli_arg` | string? | CLI arg injected when bypass mode is active (e.g. `"--dangerously-skip-permissions"`). |
 | `permission_mode_env_vars` | [(string, string)] | Env vars set when bypass mode is active (e.g. `[["VIBE_ISLAND_SKIP", "1"]]`). |

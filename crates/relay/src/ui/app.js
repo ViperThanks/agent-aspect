@@ -4,7 +4,7 @@
 // buildNewJobBody / buildContinueJobBody，不允许在 submit 函数中
 // 自行拼装 body object。
 //
-// 业务原语来源：job_body.js / job_status.js（由 mobile_ui.rs 在本文件之前注入）
+// 业务原语来源：job_body.js / job_status.js / provider_capabilities.js（由 mobile_ui.rs 在本文件之前注入）
 
 // ============================================================
 // State
@@ -24,7 +24,7 @@ const S = {
   overview: { conversations: [], total: 0, active_agents: [] },
   pending: { events: [], count: 0 },
   lastJob: null,
-  runCtx: null, // { projects, recent_conversations, provider_availability }
+  runCtx: null, // { projects, recent_conversations, provider_availability + capabilities }
   convDetail: null,
   convMessages: [],
   convMessageSeqs: new Set(),
@@ -1377,8 +1377,10 @@ function renderRun() {
   const providerOpts = providerList.map(p => {
     const key = p.provider || p.key || '';
     const label = agentLabel(key);
-    const avail = p.available !== false;
-    return '<option value="' + escHtml(key) + '"' + (avail ? '' : ' disabled') + '>' + escHtml(label + (avail ? '' : ' (不可用)')) + '</option>';
+    const avail = p.available !== false && p.supports_new !== false;
+    const caps = providerCapabilityText(p.capabilities);
+    const suffix = avail ? (caps ? ' — ' + caps : '') : ' (不可用)';
+    return '<option value="' + escHtml(key) + '"' + (avail ? '' : ' disabled') + '>' + escHtml(label + suffix) + '</option>';
   }).join('');
 
   const projectOpts = projects.map(p => {

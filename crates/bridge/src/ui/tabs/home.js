@@ -176,25 +176,24 @@ function renderHomeProviders() {
     return '<div style="font-size:.8rem;color:var(--dim);padding:8px 0">加载中…</div>';
   }
   const avail = ctx.provider_availability || [];
-  const map = {};
-  avail.forEach(a => { map[a.provider] = a.available; });
-  const providers = [
-    { key: 'claude_code', label: 'Claude Code' },
-    { key: 'kimi_code', label: 'Kimi Code' },
-    { key: 'codex_cli', label: 'Codex CLI' }
-  ];
+  const providers = avail.map(a => ({
+    key: a.provider,
+    label: AGENTS[a.provider] || a.provider,
+    available: a.available,
+    capabilities: a.capabilities
+  }));
   let h = '';
   providers.forEach(p => {
-    const available = map[p.key] || false;
+    const available = p.available || false;
     const icon = available
       ? '<span style="color:var(--green)">✓</span>'
       : '<span style="color:var(--red)">✕</span>';
     h += '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);font-size:.85rem">';
-    h += '<span>' + esc(p.label) + '</span>';
+    h += '<span>' + esc(p.label) + '<span style="display:block;font-size:.68rem;color:var(--dim);margin-top:2px">' + esc(providerCapabilityText(p.capabilities)) + '</span></span>';
     h += icon;
     h += '</div>';
   });
-  return h;
+  return h || '<div style="font-size:.8rem;color:var(--dim);padding:8px 0">暂无 Provider</div>';
 }
 
 function renderHomeRelay() {

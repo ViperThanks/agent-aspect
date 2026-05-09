@@ -1730,6 +1730,8 @@ pub fn handle_get_run_context(ctx: &AppContext) -> tiny_http::ResponseBox {
                 "available": a.available,
                 "binary_path": a.binary_path,
                 "error": a.error,
+                "supports_new": ctx.registry.get(p).map(|c| c.supports_new).unwrap_or(false),
+                "capabilities": ctx.registry.capabilities(p),
             })
         })
         .collect();

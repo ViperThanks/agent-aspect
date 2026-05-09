@@ -111,13 +111,18 @@ function loadRunContext() {
     const pg = document.getElementById('provider-grid');
     if (pg) {
       let ph = '';
-      ['claude_code', 'kimi_code', 'codex_cli'].forEach(function (p) {
-        const avail = (r.provider_availability || []).find(function (x) { return x.provider === p; });
+      (r.provider_availability || []).forEach(function (avail) {
+        const p = avail.provider;
         const isAvail = avail && avail.available;
         const label = AGENTS[p] || p;
         const cls = 'provider-btn' + (RS.selectedProvider === p ? ' active' : '') + (isAvail ? '' : ' unavailable');
-        ph += '<div class="' + cls + '" data-provider="' + esc(p) + '" onclick="selectProvider(\'' + jsStr(p) + '\')">' + esc(label) + '</div>';
+        const caps = providerCapabilityLabels(avail && avail.capabilities);
+        ph += '<div class="' + cls + '" data-provider="' + esc(p) + '" onclick="selectProvider(\'' + jsStr(p) + '\')">' +
+          '<span>' + esc(label) + '</span>' +
+          '<span style="display:block;font-size:.64rem;color:var(--dim);margin-top:3px">' + esc(caps.join(' · ')) + '</span>' +
+          '</div>';
       });
+      if (!ph) ph = '<div style="color:var(--dimmer);font-size:.78rem;padding:4px 0">暂无 Provider</div>';
       pg.innerHTML = ph;
     }
 
@@ -196,6 +201,10 @@ function submitJob() {
   const avail = (RS.ctx && RS.ctx.provider_availability || []).find(function (x) { return x.provider === RS.selectedProvider; });
   if (!avail || !avail.available) {
     toast('代理不可用: ' + (avail && avail.error ? avail.error : '未找到'));
+    return;
+  }
+  if (avail.supports_new === false) {
+    toast('此代理不支持新建任务');
     return;
   }
 

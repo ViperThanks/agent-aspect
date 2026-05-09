@@ -11,10 +11,11 @@
 //! 4. api_client.js — HTTP 请求封装
 //! 5. job_body.js — job body 构造原语
 //! 6. job_status.js — job 状态与 completion 文案
-//! 7. runtime_health.js — 运行环境健康 UI
-//! 8. activity_segment.js — 活动时间线折叠（buildSegments, renderSegmentCard, renderTurnBanner）
-//! 9. approval_review.js — 审批 review payload 统一渲染
-//! 10. bridge shell JS — app.js, components.js, tabs/*
+//! 7. provider_capabilities.js — Provider capability 文案
+//! 8. runtime_health.js — 运行环境健康 UI
+//! 9. activity_segment.js — 活动时间线折叠（buildSegments, renderSegmentCard, renderTurnBanner）
+//! 10. approval_review.js — 审批 review payload 统一渲染
+//! 11. bridge shell JS — app.js, components.js, tabs/*
 
 /// 完整的 Dashboard HTML 页面，包含所有 CSS 和 JS。
 /// 修改 ui/ 目录下的文件后需要重新编译才能生效。
@@ -40,6 +41,7 @@ pub const INDEX_HTML: &str = concat!(
     include_str!("../../shared_ui/api_client.js"),
     include_str!("../../shared_ui/job_body.js"),
     include_str!("../../shared_ui/job_status.js"),
+    include_str!("../../shared_ui/provider_capabilities.js"),
     include_str!("../../shared_ui/runtime_health.js"),
     include_str!("../../shared_ui/activity_segment.js"),
     include_str!("../../shared_ui/approval_review.js"),
@@ -55,7 +57,7 @@ pub const INDEX_HTML: &str = concat!(
     // === 版本信息 ===
     "\nconsole.log('[agent-aspect-bridge] UI bundle v",
     env!("CARGO_PKG_VERSION"),
-    " shell=bridge loaded=marked,view_model,render,api_client,job_body,job_status,runtime_health,activity_segment,workflows');\n",
+    " shell=bridge loaded=marked,view_model,render,api_client,job_body,job_status,provider_capabilities,runtime_health,activity_segment,workflows');\n",
     "\nvar __BUILD_VERSION__ = '",
     env!("CARGO_PKG_VERSION"),
     "';\n",
