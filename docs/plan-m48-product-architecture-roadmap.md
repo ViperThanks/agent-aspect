@@ -9,7 +9,10 @@
 
 - M48 Mobile Control Plane Closure 第一版已完成：client token renew 使用 hash + generation CAS，旧 token 轮换后失效；mobile lease v2 以内存 lease 表达手机控制面活性；手机首页使用 `/mobile/summary` 聚合轻量摘要；hidden 状态停止重型轮询，visible / online / pageshow 恢复时补 beat、renew 和当前视图刷新；relay smoke 覆盖 renew、旧 token 拒绝、mobile summary 和 beat lease。
 - M48.5 Runtime HA Core 第一版已完成：JobRunner heartbeat 是活进程权威；scanner 只收 heartbeat stale 的 orphan job；fresh heartbeat 时 scanner 不写 job 终态；transcript no delta 先进入 maybe_idle，hard deadline + stale heartbeat 才经 CompletionSink 写 `scanner_timeout`；新增失败注入单测覆盖 fresh/stale heartbeat 和 no-delta idle。
-- 未纳入本轮：workflow recovery、retry/fallback policy、provider capability registry、Hook Strategy Config v2。
+- M49 Shared UI Product Layer 已完成：新增 shared_ui inventory；`job_status.js` 成为 job 状态和 completion 文案唯一展示原语；Bridge Home/Run 与 Relay Home/Run/History 已收敛到共享原语。
+- M50 Provider Adapter SDK 已完成：`ProviderCapabilities` 进入 provider registry；`/run/context` 下发 capabilities；Bridge/Relay provider UI 读取能力展示；新增 `docs/provider-adapter-sdk.md` 固化新 provider 接入边界。
+- M51 Hook Strategy Config v2 已完成：`EventConfig` 增加 decision/completion/timeout strategy schema；`PermissionRequest` 进入 Evaluate 阻断路径；`PostToolUse` 进入 after-hook observation 审计路径；Hook tab 展示 event strategy。
+- 下一步：M52 Orchestration HA，范围限定为 workflow/job 状态机、workflow recovery、retry/fallback、attempt/idempotency/context redaction。
 
 ---
 
