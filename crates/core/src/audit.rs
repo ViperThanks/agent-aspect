@@ -189,7 +189,7 @@ impl AuditStore {
                     name TEXT NOT NULL,
                     description TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL DEFAULT 'draft'
-                        CHECK(status IN ('draft','running','succeeded','failed','cancelled')),
+                        CHECK(status IN ('draft','running','paused','succeeded','failed','cancelled')),
                     advance_mode TEXT NOT NULL DEFAULT 'auto'
                         CHECK(advance_mode IN ('auto','manual')),
                     created_at TEXT NOT NULL,
@@ -209,6 +209,18 @@ impl AuditStore {
                     status TEXT NOT NULL DEFAULT 'pending'
                         CHECK(status IN ('pending','running','succeeded','failed','cancelled','skipped')),
                     job_id TEXT,
+                    started_at TEXT,
+                    attempt_id TEXT,
+                    idempotency_key TEXT,
+                    attempt INTEGER NOT NULL DEFAULT 1,
+                    max_attempts INTEGER NOT NULL DEFAULT 1,
+                    retry_budget INTEGER NOT NULL DEFAULT 0,
+                    heartbeat_at TEXT,
+                    hard_deadline_at TEXT,
+                    input_context_bytes INTEGER NOT NULL DEFAULT 0,
+                    output_context_bytes INTEGER NOT NULL DEFAULT 0,
+                    redaction_policy TEXT NOT NULL DEFAULT 'basic',
+                    failure_class TEXT,
                     created_at TEXT NOT NULL,
                     finished_at TEXT,
                     FOREIGN KEY (workflow_id) REFERENCES workflows(id)
@@ -235,6 +247,7 @@ impl AuditStore {
         self.migrate_v17_workflow_advance_mode()?;
         self.migrate_v18_message_thinking()?;
         self.migrate_v19_completion_observers()?;
+        self.migrate_v20_workflow_ha()?;
         self.conn
             .execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_conv_agent ON events(conversation_id, agent)",
@@ -255,6 +268,19 @@ impl AuditStore {
             .query_row(&sql, rusqlite::params![column], |row| row.get(0))
             .map_err(AgentAspectError::MigrateConversationSchema)?;
         Ok(count > 0)
+    }
+
+    /// 检查 sqlite_master 中的建表 SQL 是否包含指定片段。
+    fn table_sql_contains(&self, table: &str, needle: &str) -> AgentAspectResult<bool> {
+        let sql: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                rusqlite::params![table],
+                |row| row.get(0),
+            )
+            .map_err(AgentAspectError::MigrateConversationSchema)?;
+        Ok(sql.as_deref().unwrap_or("").contains(needle))
     }
 
     /// v2: events 表新增 conversation_id / project_path 列，jobs 新增 conversation_id。
@@ -521,7 +547,7 @@ impl AuditStore {
                     name TEXT NOT NULL,
                     description TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL DEFAULT 'draft'
-                        CHECK(status IN ('draft','running','succeeded','failed','cancelled')),
+                        CHECK(status IN ('draft','running','paused','succeeded','failed','cancelled')),
                     advance_mode TEXT NOT NULL DEFAULT 'auto'
                         CHECK(advance_mode IN ('auto','manual')),
                     created_at TEXT NOT NULL,
@@ -541,12 +567,100 @@ impl AuditStore {
                     status TEXT NOT NULL DEFAULT 'pending'
                         CHECK(status IN ('pending','running','succeeded','failed','cancelled','skipped')),
                     job_id TEXT,
+                    started_at TEXT,
+                    attempt_id TEXT,
+                    idempotency_key TEXT,
+                    attempt INTEGER NOT NULL DEFAULT 1,
+                    max_attempts INTEGER NOT NULL DEFAULT 1,
+                    retry_budget INTEGER NOT NULL DEFAULT 0,
+                    heartbeat_at TEXT,
+                    hard_deadline_at TEXT,
+                    input_context_bytes INTEGER NOT NULL DEFAULT 0,
+                    output_context_bytes INTEGER NOT NULL DEFAULT 0,
+                    redaction_policy TEXT NOT NULL DEFAULT 'basic',
+                    failure_class TEXT,
                     created_at TEXT NOT NULL,
                     finished_at TEXT,
                     FOREIGN KEY (workflow_id) REFERENCES workflows(id)
                 );
                 CREATE INDEX IF NOT EXISTS idx_workflow_steps_workflow ON workflow_steps(workflow_id, step_order);
                 CREATE INDEX IF NOT EXISTS idx_workflow_steps_job ON workflow_steps(job_id);",
+            )
+            .map_err(AgentAspectError::MigrateConversationSchema)?;
+        Ok(())
+    }
+
+    /// v20: workflow HA schema。
+    ///
+    /// 增加 paused 状态、attempt/idempotency/retry 元数据、上下文体积与脱敏策略字段。
+    /// 旧 SQLite CHECK 不能直接 ALTER，因此 workflows 表在需要时做一次安全重建。
+    fn migrate_v20_workflow_ha(&self) -> AgentAspectResult<()> {
+        if !self.table_sql_contains("workflows", "'paused'")? {
+            self.conn
+                .execute_batch(
+                    "ALTER TABLE workflows RENAME TO workflows_v20_old;
+                     CREATE TABLE workflows (
+                         id TEXT PRIMARY KEY,
+                         name TEXT NOT NULL,
+                         description TEXT NOT NULL DEFAULT '',
+                         status TEXT NOT NULL DEFAULT 'draft'
+                             CHECK(status IN ('draft','running','paused','succeeded','failed','cancelled')),
+                         advance_mode TEXT NOT NULL DEFAULT 'auto'
+                             CHECK(advance_mode IN ('auto','manual')),
+                         created_at TEXT NOT NULL,
+                         updated_at TEXT NOT NULL
+                     );
+                     INSERT INTO workflows (id, name, description, status, advance_mode, created_at, updated_at)
+                     SELECT id, name, description, status, advance_mode, created_at, updated_at
+                     FROM workflows_v20_old;
+                     DROP TABLE workflows_v20_old;",
+                )
+                .map_err(AgentAspectError::MigrateConversationSchema)?;
+        }
+
+        let workflow_step_columns = [
+            ("started_at", "TEXT"),
+            ("attempt_id", "TEXT"),
+            ("idempotency_key", "TEXT"),
+            ("attempt", "INTEGER NOT NULL DEFAULT 1"),
+            ("max_attempts", "INTEGER NOT NULL DEFAULT 1"),
+            ("retry_budget", "INTEGER NOT NULL DEFAULT 0"),
+            ("heartbeat_at", "TEXT"),
+            ("hard_deadline_at", "TEXT"),
+            ("input_context_bytes", "INTEGER NOT NULL DEFAULT 0"),
+            ("output_context_bytes", "INTEGER NOT NULL DEFAULT 0"),
+            ("redaction_policy", "TEXT NOT NULL DEFAULT 'basic'"),
+            ("failure_class", "TEXT"),
+        ];
+
+        for (column, ty) in workflow_step_columns {
+            if !self.column_exists("workflow_steps", column)? {
+                self.conn
+                    .execute(
+                        &format!("ALTER TABLE workflow_steps ADD COLUMN {column} {ty}"),
+                        [],
+                    )
+                    .map_err(AgentAspectError::MigrateConversationSchema)?;
+            }
+        }
+
+        self.conn
+            .execute(
+                "UPDATE workflow_steps
+                 SET attempt_id = COALESCE(attempt_id, id || ':attempt:1'),
+                     idempotency_key = COALESCE(idempotency_key, workflow_id || ':' || step_order || ':1'),
+                     max_attempts = CASE WHEN max_attempts < attempt THEN attempt ELSE max_attempts END,
+                     retry_budget = CASE WHEN retry_budget < 0 THEN 0 ELSE retry_budget END,
+                     redaction_policy = COALESCE(NULLIF(redaction_policy, ''), 'basic')",
+                [],
+            )
+            .map_err(AgentAspectError::MigrateConversationSchema)?;
+
+        self.conn
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_workflow_steps_active
+                    ON workflow_steps(workflow_id, status, step_order)",
+                [],
             )
             .map_err(AgentAspectError::MigrateConversationSchema)?;
         Ok(())

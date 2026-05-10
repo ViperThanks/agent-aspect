@@ -12,7 +12,8 @@
 - M49 Shared UI Product Layer 已完成：新增 shared_ui inventory；`job_status.js` 成为 job 状态和 completion 文案唯一展示原语；Bridge Home/Run 与 Relay Home/Run/History 已收敛到共享原语。
 - M50 Provider Adapter SDK 已完成：`ProviderCapabilities` 进入 provider registry；`/run/context` 下发 capabilities；Bridge/Relay provider UI 读取能力展示；新增 `docs/provider-adapter-sdk.md` 固化新 provider 接入边界。
 - M51 Hook Strategy Config v2 已完成：`EventConfig` 增加 decision/completion/timeout strategy schema；`PermissionRequest` 进入 Evaluate 阻断路径；`PostToolUse` 进入 after-hook observation 审计路径；Hook tab 展示 event strategy。
-- 下一步：M52 Orchestration HA，范围限定为 workflow/job 状态机、workflow recovery、retry/fallback、attempt/idempotency/context redaction。
+- M52 Orchestration HA 第一片已完成：workflow schema 增加 attempt/idempotency/retry/context/redaction 元数据；Bridge 启动恢复 stale running/paused workflow；step 下游上下文增加脱敏与 64KB 上限。
+- 下一步：M52 剩余部分，范围限定为 retry/fallback 执行策略、attempt 推进、hard_deadline 接线与 workflow UI 可观测。
 
 ---
 

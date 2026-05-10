@@ -7,6 +7,13 @@
 use crate::audit::AuditStore;
 use crate::error::{AgentAspectError, AgentAspectResult};
 
+const WORKFLOW_STEP_COLUMNS: &str =
+    "id, workflow_id, step_order, kind, provider, project_path, prompt,
+    context_strategy, context_from_step, status, job_id, created_at, finished_at,
+    started_at, attempt_id, idempotency_key, attempt, max_attempts, retry_budget,
+    heartbeat_at, hard_deadline_at, input_context_bytes, output_context_bytes,
+    redaction_policy, failure_class";
+
 /// 工作流行 — 对应 workflows 表所有列。
 #[derive(Debug, Clone)]
 pub struct WorkflowRow {
@@ -35,6 +42,18 @@ pub struct WorkflowStepRow {
     pub job_id: Option<String>,
     pub created_at: String,
     pub finished_at: Option<String>,
+    pub started_at: Option<String>,
+    pub attempt_id: Option<String>,
+    pub idempotency_key: Option<String>,
+    pub attempt: i64,
+    pub max_attempts: i64,
+    pub retry_budget: i64,
+    pub heartbeat_at: Option<String>,
+    pub hard_deadline_at: Option<String>,
+    pub input_context_bytes: i64,
+    pub output_context_bytes: i64,
+    pub redaction_policy: String,
+    pub failure_class: Option<String>,
 }
 
 /// 工作流推进信号行 — daemon stop hook 写入，bridge 消费。
@@ -79,6 +98,18 @@ impl AuditStore {
             job_id: row.get(10)?,
             created_at: row.get(11)?,
             finished_at: row.get(12)?,
+            started_at: row.get(13)?,
+            attempt_id: row.get(14)?,
+            idempotency_key: row.get(15)?,
+            attempt: row.get(16)?,
+            max_attempts: row.get(17)?,
+            retry_budget: row.get(18)?,
+            heartbeat_at: row.get(19)?,
+            hard_deadline_at: row.get(20)?,
+            input_context_bytes: row.get(21)?,
+            output_context_bytes: row.get(22)?,
+            redaction_policy: row.get(23)?,
+            failure_class: row.get(24)?,
         })
     }
 
@@ -315,12 +346,56 @@ impl AuditStore {
         context_from_step: Option<i64>,
         created_at: &str,
     ) -> AgentAspectResult<()> {
+        self.insert_workflow_step_with_ha(
+            id,
+            workflow_id,
+            step_order,
+            kind,
+            provider,
+            project_path,
+            prompt,
+            context_strategy,
+            context_from_step,
+            0,
+            "basic",
+            created_at,
+        )
+    }
+
+    /// 插入带 HA 元数据的工作流步骤。
+    ///
+    /// `retry_budget` 表示失败后最多可自动重试的次数；`max_attempts = retry_budget + 1`。
+    /// `idempotency_key` 以 workflow + step_order + attempt 固定生成，恢复时可识别同一次尝试。
+    pub fn insert_workflow_step_with_ha(
+        &self,
+        id: &str,
+        workflow_id: &str,
+        step_order: i64,
+        kind: &str,
+        provider: Option<&str>,
+        project_path: Option<&str>,
+        prompt: &str,
+        context_strategy: &str,
+        context_from_step: Option<i64>,
+        retry_budget: i64,
+        redaction_policy: &str,
+        created_at: &str,
+    ) -> AgentAspectResult<()> {
+        let retry_budget = retry_budget.clamp(0, 5);
+        let max_attempts = retry_budget + 1;
+        let attempt_id = format!("{id}:attempt:1");
+        let idempotency_key = format!("{workflow_id}:{step_order}:1");
+        let redaction_policy = match redaction_policy {
+            "none" | "basic" => redaction_policy,
+            _ => "basic",
+        };
         self.conn
             .execute(
                 "INSERT INTO workflow_steps
                  (id, workflow_id, step_order, kind, provider, project_path, prompt,
-                  context_strategy, context_from_step, status, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10)",
+                  context_strategy, context_from_step, status, attempt_id, idempotency_key,
+                  attempt, max_attempts, retry_budget, redaction_policy, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10, ?11, 1, ?12, ?13, ?14, ?15)",
                 rusqlite::params![
                     id,
                     workflow_id,
@@ -331,6 +406,11 @@ impl AuditStore {
                     prompt,
                     context_strategy,
                     context_from_step,
+                    attempt_id,
+                    idempotency_key,
+                    max_attempts,
+                    retry_budget,
+                    redaction_policy,
                     created_at
                 ],
             )
@@ -340,13 +420,10 @@ impl AuditStore {
 
     /// 获取单个步骤。
     pub fn get_workflow_step(&self, id: &str) -> AgentAspectResult<Option<WorkflowStepRow>> {
+        let sql = format!("SELECT {WORKFLOW_STEP_COLUMNS} FROM workflow_steps WHERE id = ?1");
         let mut stmt = self
             .conn
-            .prepare(
-                "SELECT id, workflow_id, step_order, kind, provider, project_path, prompt,
-                        context_strategy, context_from_step, status, job_id, created_at, finished_at
-                 FROM workflow_steps WHERE id = ?1",
-            )
+            .prepare(&sql)
             .map_err(AgentAspectError::QueryWorkflowStep)?;
         let mut rows = stmt
             .query_map(rusqlite::params![id], Self::map_workflow_step_row)
@@ -359,13 +436,13 @@ impl AuditStore {
 
     /// 获取工作流的所有步骤，按 step_order 排序。
     pub fn get_workflow_steps(&self, workflow_id: &str) -> AgentAspectResult<Vec<WorkflowStepRow>> {
+        let sql = format!(
+            "SELECT {WORKFLOW_STEP_COLUMNS} FROM workflow_steps
+             WHERE workflow_id = ?1 ORDER BY step_order ASC"
+        );
         let mut stmt = self
             .conn
-            .prepare(
-                "SELECT id, workflow_id, step_order, kind, provider, project_path, prompt,
-                        context_strategy, context_from_step, status, job_id, created_at, finished_at
-                 FROM workflow_steps WHERE workflow_id = ?1 ORDER BY step_order ASC",
-            )
+            .prepare(&sql)
             .map_err(AgentAspectError::QueryWorkflowStep)?;
         let rows = stmt
             .query_map(rusqlite::params![workflow_id], Self::map_workflow_step_row)
@@ -381,11 +458,59 @@ impl AuditStore {
         status: &str,
         finished_at: Option<&str>,
     ) -> AgentAspectResult<usize> {
+        let now = chrono::Utc::now().to_rfc3339();
         let rows = self
             .conn
             .execute(
-                "UPDATE workflow_steps SET status = ?2, finished_at = COALESCE(?3, finished_at) WHERE id = ?1",
-                rusqlite::params![id, status, finished_at],
+                "UPDATE workflow_steps
+                 SET status = ?2,
+                     started_at = CASE WHEN ?2 = 'running' THEN COALESCE(started_at, ?4) ELSE started_at END,
+                     heartbeat_at = CASE WHEN ?2 = 'running' THEN ?4 ELSE heartbeat_at END,
+                     finished_at = COALESCE(?3, finished_at)
+                 WHERE id = ?1
+                   AND (
+                     status = ?2
+                     OR (status = 'pending' AND ?2 IN ('running','succeeded','failed','cancelled','skipped'))
+                     OR (status = 'running' AND ?2 IN ('succeeded','failed','cancelled','running'))
+                     OR (status IN ('failed','cancelled','skipped') AND ?2 = 'pending')
+                   )",
+                rusqlite::params![id, status, finished_at, now],
+            )
+            .map_err(AgentAspectError::UpdateWorkflowStep)?;
+        Ok(rows)
+    }
+
+    /// 更新步骤上下文体积指标。
+    pub fn update_workflow_step_context_metrics(
+        &self,
+        id: &str,
+        input_context_bytes: i64,
+        output_context_bytes: Option<i64>,
+    ) -> AgentAspectResult<usize> {
+        let rows = self
+            .conn
+            .execute(
+                "UPDATE workflow_steps
+                 SET input_context_bytes = ?2,
+                     output_context_bytes = COALESCE(?3, output_context_bytes)
+                 WHERE id = ?1",
+                rusqlite::params![id, input_context_bytes, output_context_bytes],
+            )
+            .map_err(AgentAspectError::UpdateWorkflowStep)?;
+        Ok(rows)
+    }
+
+    /// 标记步骤失败分类，便于 recovery/retry/fallback 后续策略读取。
+    pub fn update_workflow_step_failure_class(
+        &self,
+        id: &str,
+        failure_class: &str,
+    ) -> AgentAspectResult<usize> {
+        let rows = self
+            .conn
+            .execute(
+                "UPDATE workflow_steps SET failure_class = ?2 WHERE id = ?1",
+                rusqlite::params![id, failure_class],
             )
             .map_err(AgentAspectError::UpdateWorkflowStep)?;
         Ok(rows)
@@ -409,13 +534,13 @@ impl AuditStore {
         workflow_id: &str,
         step_order: i64,
     ) -> AgentAspectResult<Option<WorkflowStepRow>> {
+        let sql = format!(
+            "SELECT {WORKFLOW_STEP_COLUMNS} FROM workflow_steps
+             WHERE workflow_id = ?1 AND step_order = ?2"
+        );
         let mut stmt = self
             .conn
-            .prepare(
-                "SELECT id, workflow_id, step_order, kind, provider, project_path, prompt,
-                        context_strategy, context_from_step, status, job_id, created_at, finished_at
-                 FROM workflow_steps WHERE workflow_id = ?1 AND step_order = ?2",
-            )
+            .prepare(&sql)
             .map_err(AgentAspectError::QueryWorkflowStep)?;
         let mut rows = stmt
             .query_map(
@@ -434,14 +559,14 @@ impl AuditStore {
         &self,
         workflow_id: &str,
     ) -> AgentAspectResult<Option<WorkflowStepRow>> {
+        let sql = format!(
+            "SELECT {WORKFLOW_STEP_COLUMNS} FROM workflow_steps
+             WHERE workflow_id = ?1 AND status = 'pending'
+             ORDER BY step_order ASC LIMIT 1"
+        );
         let mut stmt = self
             .conn
-            .prepare(
-                "SELECT id, workflow_id, step_order, kind, provider, project_path, prompt,
-                        context_strategy, context_from_step, status, job_id, created_at, finished_at
-                 FROM workflow_steps WHERE workflow_id = ?1 AND status = 'pending'
-                 ORDER BY step_order ASC LIMIT 1",
-            )
+            .prepare(&sql)
             .map_err(AgentAspectError::QueryWorkflowStep)?;
         let mut rows = stmt
             .query_map(rusqlite::params![workflow_id], Self::map_workflow_step_row)
@@ -463,6 +588,49 @@ impl AuditStore {
             )
             .map_err(AgentAspectError::UpdateWorkflowStep)?;
         Ok(rows)
+    }
+
+    /// Bridge 启动恢复：把失去内存 runner 的 running/paused workflow 收敛到 failed。
+    ///
+    /// 已成功的步骤保留；running 步骤标记 failed；pending 步骤标记 skipped。
+    pub fn recover_stale_workflows(&self, timestamp: &str) -> AgentAspectResult<usize> {
+        let ids: Vec<String> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id FROM workflows WHERE status IN ('running','paused')")
+                .map_err(AgentAspectError::QueryWorkflow)?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(AgentAspectError::QueryWorkflow)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(AgentAspectError::QueryWorkflow)?
+        };
+
+        for workflow_id in &ids {
+            self.conn
+                .execute(
+                    "UPDATE workflow_steps
+                     SET status = 'failed',
+                         finished_at = COALESCE(finished_at, ?2),
+                         heartbeat_at = ?2,
+                         failure_class = 'bridge_restart'
+                     WHERE workflow_id = ?1 AND status = 'running'",
+                    rusqlite::params![workflow_id, timestamp],
+                )
+                .map_err(AgentAspectError::UpdateWorkflowStep)?;
+            self.conn
+                .execute(
+                    "UPDATE workflow_steps
+                     SET status = 'skipped',
+                         finished_at = COALESCE(finished_at, ?2)
+                     WHERE workflow_id = ?1 AND status = 'pending'",
+                    rusqlite::params![workflow_id, timestamp],
+                )
+                .map_err(AgentAspectError::UpdateWorkflowStep)?;
+            self.update_workflow_status(workflow_id, "failed", timestamp)?;
+        }
+
+        Ok(ids.len())
     }
 
     /// 统计工作流总数。
@@ -568,6 +736,117 @@ mod tests {
         assert_eq!(steps[1].step_order, 1);
         assert_eq!(steps[1].context_strategy, "last_50_lines");
         assert_eq!(steps[1].context_from_step, Some(0));
+    }
+
+    #[test]
+    fn workflow_step_ha_fields_have_defaults_and_metrics() {
+        let store = AuditStore::open_in_memory().unwrap();
+        let now = "2026-05-04T10:00:00Z";
+
+        store.insert_workflow("wf1", "Test", "", now).unwrap();
+        store
+            .insert_workflow_step_with_ha(
+                "s1",
+                "wf1",
+                0,
+                "agent_prompt",
+                Some("claude_code"),
+                None,
+                "step 1",
+                "last_50_lines",
+                None,
+                2,
+                "basic",
+                now,
+            )
+            .unwrap();
+
+        let step = store.get_workflow_step("s1").unwrap().unwrap();
+        assert_eq!(step.attempt, 1);
+        assert_eq!(step.max_attempts, 3);
+        assert_eq!(step.retry_budget, 2);
+        assert_eq!(step.redaction_policy, "basic");
+        assert_eq!(step.attempt_id.as_deref(), Some("s1:attempt:1"));
+        assert_eq!(step.idempotency_key.as_deref(), Some("wf1:0:1"));
+
+        store
+            .update_workflow_step_context_metrics("s1", 128, Some(256))
+            .unwrap();
+        let step = store.get_workflow_step("s1").unwrap().unwrap();
+        assert_eq!(step.input_context_bytes, 128);
+        assert_eq!(step.output_context_bytes, 256);
+    }
+
+    #[test]
+    fn recover_stale_workflows_closes_running_and_pending_steps() {
+        let store = AuditStore::open_in_memory().unwrap();
+        let now = "2026-05-04T10:00:00Z";
+        let recovered_at = "2026-05-04T10:05:00Z";
+
+        store.insert_workflow("wf1", "Test", "", now).unwrap();
+        store.update_workflow_status("wf1", "running", now).unwrap();
+        store
+            .insert_workflow_step(
+                "s1",
+                "wf1",
+                0,
+                "agent_prompt",
+                None,
+                None,
+                "done",
+                "none",
+                None,
+                now,
+            )
+            .unwrap();
+        store
+            .insert_workflow_step(
+                "s2",
+                "wf1",
+                1,
+                "agent_prompt",
+                None,
+                None,
+                "run",
+                "none",
+                None,
+                now,
+            )
+            .unwrap();
+        store
+            .insert_workflow_step(
+                "s3",
+                "wf1",
+                2,
+                "agent_prompt",
+                None,
+                None,
+                "pending",
+                "none",
+                None,
+                now,
+            )
+            .unwrap();
+
+        store
+            .update_workflow_step_status("s1", "succeeded", Some(now))
+            .unwrap();
+        store
+            .update_workflow_step_status("s2", "running", None)
+            .unwrap();
+
+        let count = store.recover_stale_workflows(recovered_at).unwrap();
+        assert_eq!(count, 1);
+
+        let wf = store.get_workflow("wf1").unwrap().unwrap();
+        assert_eq!(wf.status, "failed");
+        let s1 = store.get_workflow_step("s1").unwrap().unwrap();
+        let s2 = store.get_workflow_step("s2").unwrap().unwrap();
+        let s3 = store.get_workflow_step("s3").unwrap().unwrap();
+        assert_eq!(s1.status, "succeeded");
+        assert_eq!(s2.status, "failed");
+        assert_eq!(s2.failure_class.as_deref(), Some("bridge_restart"));
+        assert_eq!(s3.status, "skipped");
     }
 
     #[test]

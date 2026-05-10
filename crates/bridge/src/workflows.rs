@@ -22,6 +22,9 @@ use crate::jobs::JobRunner;
 use crate::routes::{json_response, read_json_body};
 use crate::sse::SharedBroadcaster;
 
+const MAX_WORKFLOW_CONTEXT_BYTES: usize = 64 * 1024;
+const REDACTION_POLICIES: &[&str] = &["none", "basic"];
+
 /// 工作流运行状态。
 struct RunningWorkflow {
     workflow_id: String,
@@ -43,6 +46,17 @@ impl WorkflowRunner {
         broadcaster: SharedBroadcaster,
         job_runner: Arc<JobRunner>,
     ) -> Self {
+        if let Ok(store) = AuditStore::open(&db_path) {
+            let now = chrono::Utc::now().to_rfc3339();
+            match store.recover_stale_workflows(&now) {
+                Ok(count) if count > 0 => {
+                    eprintln!("agent-aspect-bridge: recovered {count} stale workflow(s)");
+                }
+                Ok(_) => {}
+                Err(e) => eprintln!("agent-aspect-bridge: stale workflow recovery failed: {e}"),
+            }
+        }
+
         Self {
             running: Arc::new(Mutex::new(None)),
             db_path,
@@ -296,11 +310,18 @@ fn execute_workflow_inner(
             .context_from_step
             .and_then(|order| step_logs.get(&order).map(|s| s.as_str()))
             .or(previous_logs.as_deref());
-        let prompt = build_step_prompt(step, context_logs);
+        let step_prompt = build_step_prompt(step, context_logs);
 
         // 更新步骤状态为 running
         store
             .update_workflow_step_status(&step.id, "running", None)
+            .map_err(|e| ExecuteError::Db(e.to_string()))?;
+        store
+            .update_workflow_step_context_metrics(
+                &step.id,
+                step_prompt.input_context_bytes as i64,
+                None,
+            )
             .map_err(|e| ExecuteError::Db(e.to_string()))?;
 
         broadcaster.lock().unwrap().broadcast(crate::sse::SseEvent {
@@ -322,7 +343,7 @@ fn execute_workflow_inner(
             &step.kind,
             provider,
             project_path,
-            &prompt,
+            &step_prompt.prompt,
             None, // conversation_id: workflow steps 每步独立
             Some(workflow_id),
         );
@@ -353,11 +374,20 @@ fn execute_workflow_inner(
 
                 if step_status == "failed" {
                     let reason = failure_reason.unwrap_or_default();
+                    let _ = store.update_workflow_step_failure_class(
+                        &step.id,
+                        classify_failure(job_status, Some(&reason)),
+                    );
                     return Err(ExecuteError::JobFailed(reason));
                 }
 
                 // 读取日志作为下一步上下文，同时存入 step_logs
                 let logs = read_job_logs_for_context(&store, &job_id, &step.context_strategy);
+                let _ = store.update_workflow_step_context_metrics(
+                    &step.id,
+                    step_prompt.input_context_bytes as i64,
+                    Some(logs.len() as i64),
+                );
                 step_logs.insert(step.step_order, logs.clone());
                 previous_logs = Some(logs);
 
@@ -419,6 +449,7 @@ fn execute_workflow_inner(
                 let store =
                     AuditStore::open(db_path).map_err(|e| ExecuteError::Db(e.to_string()))?;
                 let _ = store.update_workflow_step_status(&step.id, "failed", Some(&now));
+                let _ = store.update_workflow_step_failure_class(&step.id, "submit_failed");
                 return Err(ExecuteError::JobFailed(e));
             }
         }
@@ -458,16 +489,96 @@ fn read_job_logs_for_context(store: &AuditStore, job_id: &str, strategy: &str) -
     }
 }
 
-/// 构建 step prompt：将前一步的日志作为上下文注入。
-fn build_step_prompt(step: &WorkflowStepRow, previous_logs: Option<&str>) -> String {
+struct StepPrompt {
+    prompt: String,
+    input_context_bytes: usize,
+}
+
+/// 构建 step prompt：将前一步日志脱敏、限流后作为上下文注入。
+fn build_step_prompt(step: &WorkflowStepRow, previous_logs: Option<&str>) -> StepPrompt {
     match (step.context_strategy.as_str(), previous_logs) {
-        ("none", _) | (_, None) | (_, Some("")) => step.prompt.clone(),
+        ("none", _) | (_, None) | (_, Some("")) => StepPrompt {
+            prompt: step.prompt.clone(),
+            input_context_bytes: 0,
+        },
         (strategy, Some(logs)) => {
-            format!(
+            let redacted = redact_workflow_context(logs, &step.redaction_policy);
+            let bounded = bound_workflow_context(&redacted);
+            let prompt = format!(
                 "[Previous step output ({}):]\n{}\n\n[Your task:]\n{}",
-                strategy, logs, step.prompt
-            )
+                strategy, bounded, step.prompt
+            );
+            StepPrompt {
+                prompt,
+                input_context_bytes: bounded.len(),
+            }
         }
+    }
+}
+
+/// 对 workflow 下游上下文做保守脱敏。
+fn redact_workflow_context(input: &str, policy: &str) -> String {
+    if policy == "none" {
+        return input.to_string();
+    }
+
+    input
+        .lines()
+        .map(redact_workflow_line)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn redact_workflow_line(line: &str) -> String {
+    let lower = line.to_ascii_lowercase();
+    if lower.contains("authorization: bearer") {
+        return "authorization: bearer [REDACTED]".to_string();
+    }
+    if lower.contains("api_key")
+        || lower.contains("apikey")
+        || lower.contains("password")
+        || lower.contains("secret")
+        || lower.contains("token")
+    {
+        if let Some((key, _)) = line.split_once('=') {
+            return format!("{}=[REDACTED]", key.trim_end());
+        }
+        if let Some((key, _)) = line.split_once(':') {
+            return format!("{}: [REDACTED]", key.trim_end());
+        }
+        return "[REDACTED]".to_string();
+    }
+    line.to_string()
+}
+
+/// 控制传给下一步 provider 的上下文上限，保留尾部最新信息。
+fn bound_workflow_context(input: &str) -> String {
+    if input.len() <= MAX_WORKFLOW_CONTEXT_BYTES {
+        return input.to_string();
+    }
+
+    let start = input.len().saturating_sub(MAX_WORKFLOW_CONTEXT_BYTES);
+    let bounded = input
+        .char_indices()
+        .find(|(idx, _)| *idx >= start)
+        .map(|(idx, _)| &input[idx..])
+        .unwrap_or(input);
+    format!("[context truncated to last {MAX_WORKFLOW_CONTEXT_BYTES} bytes]\n{bounded}")
+}
+
+fn classify_failure(job_status: &str, failure_reason: Option<&str>) -> &'static str {
+    if job_status == "cancelled" {
+        return "cancelled";
+    }
+    let reason = failure_reason.unwrap_or("").to_ascii_lowercase();
+    if reason.contains("timeout")
+        || reason.contains("scanner")
+        || reason.contains("deadline")
+        || reason.contains("idle")
+    {
+        "timeout"
+    } else {
+        "process_failed"
     }
 }
 
@@ -537,6 +648,28 @@ pub fn handle_post_workflows(
                 }),
             );
         }
+        let redaction_policy = step_val
+            .get("redaction_policy")
+            .and_then(|v| v.as_str())
+            .unwrap_or("basic");
+        if !REDACTION_POLICIES.contains(&redaction_policy) {
+            return json_response(
+                400,
+                &serde_json::json!({
+                    "error": format!("step {} invalid redaction_policy '{}', allowed: {:?}", i, redaction_policy, REDACTION_POLICIES)
+                }),
+            );
+        }
+        if let Some(retry_budget) = step_val.get("retry_budget").and_then(|v| v.as_i64()) {
+            if !(0..=5).contains(&retry_budget) {
+                return json_response(
+                    400,
+                    &serde_json::json!({
+                        "error": format!("step {} retry_budget must be between 0 and 5", i)
+                    }),
+                );
+            }
+        }
     }
 
     let store = ctx.store.lock().unwrap();
@@ -564,8 +697,16 @@ pub fn handle_post_workflows(
             .and_then(|v| v.as_str())
             .unwrap_or("none");
         let context_from_step = step_val.get("context_from_step").and_then(|v| v.as_i64());
+        let retry_budget = step_val
+            .get("retry_budget")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let redaction_policy = step_val
+            .get("redaction_policy")
+            .and_then(|v| v.as_str())
+            .unwrap_or("basic");
 
-        if let Err(e) = store.insert_workflow_step(
+        if let Err(e) = store.insert_workflow_step_with_ha(
             &step_id,
             &wf_id,
             i as i64,
@@ -575,6 +716,8 @@ pub fn handle_post_workflows(
             prompt,
             context_strategy,
             context_from_step,
+            retry_budget,
+            redaction_policy,
             &now,
         ) {
             return json_response(500, &serde_json::json!({"error": e.to_string()}));
@@ -674,8 +817,20 @@ pub fn handle_get_workflow(
                 "context_from_step": s.context_from_step,
                 "status": s.status,
                 "job_id": s.job_id,
+                "started_at": s.started_at,
                 "created_at": s.created_at,
                 "finished_at": s.finished_at,
+                "attempt_id": s.attempt_id,
+                "idempotency_key": s.idempotency_key,
+                "attempt": s.attempt,
+                "max_attempts": s.max_attempts,
+                "retry_budget": s.retry_budget,
+                "heartbeat_at": s.heartbeat_at,
+                "hard_deadline_at": s.hard_deadline_at,
+                "input_context_bytes": s.input_context_bytes,
+                "output_context_bytes": s.output_context_bytes,
+                "redaction_policy": s.redaction_policy,
+                "failure_class": s.failure_class,
             })
         })
         .collect();
