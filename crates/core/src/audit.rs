@@ -27,7 +27,10 @@ pub use crate::store::jobs::{JobLogRow, JobRow};
 pub use crate::store::messages::SyncStateRow;
 pub use crate::store::suggestions::SuggestionRow;
 pub use crate::store::users::UserRow;
-pub use crate::store::workflows::{WorkflowRow, WorkflowStepRow};
+pub use crate::store::workflows::{
+    WorkflowAttemptStatus, WorkflowFailureClass, WorkflowRow, WorkflowStepAttemptRow,
+    WorkflowStepRow, WorkflowStepStatus,
+};
 
 /// 审计存储 facade — 持有 SQLite 连接，所有 DAO 方法通过 split impl 分布在各 store/ 子模块。
 pub struct AuditStore {
@@ -248,6 +251,7 @@ impl AuditStore {
         self.migrate_v18_message_thinking()?;
         self.migrate_v19_completion_observers()?;
         self.migrate_v20_workflow_ha()?;
+        self.migrate_v21_workflow_attempts()?;
         self.conn
             .execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_conv_agent ON events(conversation_id, agent)",
@@ -661,6 +665,42 @@ impl AuditStore {
                 "CREATE INDEX IF NOT EXISTS idx_workflow_steps_active
                     ON workflow_steps(workflow_id, status, step_order)",
                 [],
+            )
+            .map_err(AgentAspectError::MigrateConversationSchema)?;
+        Ok(())
+    }
+
+    /// v21: workflow step attempts 表。
+    ///
+    /// step 行只保存当前 attempt 摘要；attempts 表保存每次运行的 job_id、失败分类和上下文体积，
+    /// 使 retry 不覆盖上一轮执行证据。
+    fn migrate_v21_workflow_attempts(&self) -> AgentAspectResult<()> {
+        self.conn
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS workflow_step_attempts (
+                    id TEXT PRIMARY KEY,
+                    workflow_step_id TEXT NOT NULL,
+                    workflow_id TEXT NOT NULL,
+                    attempt INTEGER NOT NULL,
+                    idempotency_key TEXT NOT NULL,
+                    job_id TEXT,
+                    status TEXT NOT NULL DEFAULT 'running'
+                        CHECK(status IN ('running','succeeded','failed','cancelled','skipped')),
+                    failure_class TEXT,
+                    failure_reason TEXT,
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    input_context_bytes INTEGER NOT NULL DEFAULT 0,
+                    output_context_bytes INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (workflow_step_id) REFERENCES workflow_steps(id),
+                    FOREIGN KEY (workflow_id) REFERENCES workflows(id)
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_attempts_step_attempt
+                    ON workflow_step_attempts(workflow_step_id, attempt);
+                CREATE INDEX IF NOT EXISTS idx_workflow_attempts_workflow
+                    ON workflow_step_attempts(workflow_id, workflow_step_id, attempt);",
             )
             .map_err(AgentAspectError::MigrateConversationSchema)?;
         Ok(())

@@ -12,7 +12,9 @@
 
 use agent_aspect_core::audit::AuditStore;
 use agent_aspect_core::error::AgentAspectError;
-use agent_aspect_core::store::workflows::WorkflowStepRow;
+use agent_aspect_core::store::workflows::{
+    WorkflowAttemptStatus, WorkflowFailureClass, WorkflowStepRow,
+};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -305,152 +307,233 @@ fn execute_workflow_inner(
             continue;
         }
 
-        // 构建 prompt：优先使用 context_from_step 指定的 step 日志，否则 fallback 到紧邻前一步
-        let context_logs = step
-            .context_from_step
-            .and_then(|order| step_logs.get(&order).map(|s| s.as_str()))
-            .or(previous_logs.as_deref());
-        let step_prompt = build_step_prompt(step, context_logs);
-
-        // 更新步骤状态为 running
-        store
-            .update_workflow_step_status(&step.id, "running", None)
-            .map_err(|e| ExecuteError::Db(e.to_string()))?;
-        store
-            .update_workflow_step_context_metrics(
-                &step.id,
-                step_prompt.input_context_bytes as i64,
-                None,
-            )
-            .map_err(|e| ExecuteError::Db(e.to_string()))?;
-
-        broadcaster.lock().unwrap().broadcast(crate::sse::SseEvent {
-            event_type: "workflow_step_status".to_string(),
-            data: serde_json::json!({
-                "workflow_id": workflow_id,
-                "step_id": step.id,
-                "step_order": step.step_order,
-                "status": "running"
-            })
-            .to_string(),
-        });
-
-        // 通过 JobRunner 提交并同步等待完成
-        let provider = step.provider.as_deref().unwrap_or("claude_code");
-        let project_path = step.project_path.as_deref();
-
-        let job_result = job_runner.submit_workflow_step(
-            &step.kind,
-            provider,
-            project_path,
-            &step_prompt.prompt,
-            None, // conversation_id: workflow steps 每步独立
-            Some(workflow_id),
-        );
-
-        match job_result {
-            Ok(job_id) => {
-                // 绑定 job_id 到步骤
-                let store =
-                    AuditStore::open(db_path).map_err(|e| ExecuteError::Db(e.to_string()))?;
-                let _ = store.update_workflow_step_job(&step.id, &job_id);
-
-                // 读取 job 实际结果（completion signal 在 DB 写入后发送，此时状态已 finalized）
-                let job = store
-                    .get_job(&job_id)
-                    .map_err(|e| ExecuteError::Db(e.to_string()))?;
-                let job_status = job.as_ref().map(|j| j.status.as_str()).unwrap_or("failed");
-                let failure_reason = job.as_ref().and_then(|j| j.failure_reason.clone());
-
-                let now = chrono::Utc::now().to_rfc3339();
-                let step_status = if job_status == "succeeded" {
-                    "succeeded"
-                } else {
-                    "failed"
-                };
-                store
-                    .update_workflow_step_status(&step.id, step_status, Some(&now))
-                    .map_err(|e| ExecuteError::Db(e.to_string()))?;
-
-                if step_status == "failed" {
-                    let reason = failure_reason.unwrap_or_default();
-                    let _ = store.update_workflow_step_failure_class(
-                        &step.id,
-                        classify_failure(job_status, Some(&reason)),
-                    );
-                    return Err(ExecuteError::JobFailed(reason));
-                }
-
-                // 读取日志作为下一步上下文，同时存入 step_logs
-                let logs = read_job_logs_for_context(&store, &job_id, &step.context_strategy);
-                let _ = store.update_workflow_step_context_metrics(
-                    &step.id,
+        let mut current_step = step.clone();
+        loop {
+            // 构建 prompt：优先使用 context_from_step 指定的 step 日志，否则 fallback 到紧邻前一步
+            let context_logs = current_step
+                .context_from_step
+                .and_then(|order| step_logs.get(&order).map(|s| s.as_str()))
+                .or(previous_logs.as_deref());
+            let step_prompt = build_step_prompt(&current_step, context_logs);
+            let now = chrono::Utc::now().to_rfc3339();
+            let attempt_id = store
+                .begin_workflow_step_attempt(
+                    &current_step,
                     step_prompt.input_context_bytes as i64,
-                    Some(logs.len() as i64),
-                );
-                step_logs.insert(step.step_order, logs.clone());
-                previous_logs = Some(logs);
+                    &now,
+                )
+                .map_err(|e| ExecuteError::Db(e.to_string()))?;
 
-                broadcaster.lock().unwrap().broadcast(crate::sse::SseEvent {
-                    event_type: "workflow_step_status".to_string(),
-                    data: serde_json::json!({
-                        "workflow_id": workflow_id,
-                        "step_id": step.id,
-                        "step_order": step.step_order,
-                        "status": "succeeded"
-                    })
-                    .to_string(),
-                });
+            broadcaster.lock().unwrap().broadcast(crate::sse::SseEvent {
+                event_type: "workflow_step_status".to_string(),
+                data: serde_json::json!({
+                    "workflow_id": workflow_id,
+                    "step_id": current_step.id,
+                    "step_order": current_step.step_order,
+                    "status": "running",
+                    "attempt": current_step.attempt,
+                    "max_attempts": current_step.max_attempts,
+                })
+                .to_string(),
+            });
 
-                // manual 模式：如果还有未完成的步骤，暂停等待推进信号
-                if advance_mode == "manual" {
-                    let has_pending = steps
-                        .iter()
-                        .any(|s| s.step_order > step.step_order && s.status != "succeeded");
-                    if has_pending {
-                        let now = chrono::Utc::now().to_rfc3339();
-                        store
-                            .update_workflow_status(workflow_id, "paused", &now)
-                            .map_err(|e| ExecuteError::Db(e.to_string()))?;
-                        broadcaster.lock().unwrap().broadcast(crate::sse::SseEvent {
-                            event_type: "workflow_status".to_string(),
-                            data: workflow_id.to_string(),
-                        });
+            // 通过 JobRunner 提交并同步等待完成
+            let provider = current_step.provider.as_deref().unwrap_or("claude_code");
+            let project_path = current_step.project_path.as_deref();
 
-                        // 轮询等待 advance signal（2s 间隔）
-                        loop {
-                            if cancel_flag.load(Ordering::SeqCst) {
-                                return Err(ExecuteError::Cancelled);
+            let job_result = job_runner.submit_workflow_step(
+                &current_step.kind,
+                provider,
+                project_path,
+                &step_prompt.prompt,
+                None, // conversation_id: workflow steps 每步独立
+                Some(workflow_id),
+            );
+
+            match job_result {
+                Ok(job_id) => {
+                    // 绑定最新 job_id 到步骤，同时保留 attempt 历史。
+                    let store =
+                        AuditStore::open(db_path).map_err(|e| ExecuteError::Db(e.to_string()))?;
+                    let _ =
+                        store.set_workflow_step_current_job(&current_step.id, &attempt_id, &job_id);
+
+                    // 读取 job 实际结果（completion signal 在 DB 写入后发送，此时状态已 finalized）
+                    let job = store
+                        .get_job(&job_id)
+                        .map_err(|e| ExecuteError::Db(e.to_string()))?;
+                    let job_status = job.as_ref().map(|j| j.status.as_str()).unwrap_or("failed");
+                    let failure_reason = job.as_ref().and_then(|j| j.failure_reason.clone());
+
+                    let now = chrono::Utc::now().to_rfc3339();
+                    let step_status = if job_status == "succeeded" {
+                        WorkflowAttemptStatus::Succeeded
+                    } else {
+                        WorkflowAttemptStatus::Failed
+                    };
+                    let logs =
+                        read_job_logs_for_context(&store, &job_id, &current_step.context_strategy);
+                    let output_context_bytes = logs.len() as i64;
+                    let failure_class = if step_status == WorkflowAttemptStatus::Failed {
+                        Some(classify_failure(job_status, failure_reason.as_deref()))
+                    } else {
+                        None
+                    };
+                    let _ = store.finish_workflow_step_attempt(
+                        &attempt_id,
+                        step_status,
+                        failure_class,
+                        failure_reason.as_deref(),
+                        &now,
+                        output_context_bytes,
+                    );
+                    store
+                        .update_workflow_step_status(
+                            &current_step.id,
+                            step_status.as_str(),
+                            Some(&now),
+                        )
+                        .map_err(|e| ExecuteError::Db(e.to_string()))?;
+
+                    if step_status == WorkflowAttemptStatus::Failed {
+                        let reason = failure_reason.unwrap_or_default();
+                        let failure_class =
+                            failure_class.unwrap_or(WorkflowFailureClass::ProcessFailed);
+                        let _ = store
+                            .update_workflow_step_failure_class(&current_step.id, failure_class);
+                        if should_retry_step(&current_step, failure_class) {
+                            if store
+                                .prepare_workflow_step_retry(&current_step.id, &now)
+                                .map_err(|e| ExecuteError::Db(e.to_string()))?
+                                .is_some()
+                            {
+                                current_step = store
+                                    .get_workflow_step(&current_step.id)
+                                    .map_err(|e| ExecuteError::Db(e.to_string()))?
+                                    .ok_or_else(|| {
+                                        ExecuteError::Db("workflow step not found".to_string())
+                                    })?;
+                                broadcaster.lock().unwrap().broadcast(crate::sse::SseEvent {
+                                    event_type: "workflow_step_status".to_string(),
+                                    data: serde_json::json!({
+                                        "workflow_id": workflow_id,
+                                        "step_id": current_step.id,
+                                        "step_order": current_step.step_order,
+                                        "status": "pending",
+                                        "attempt": current_step.attempt,
+                                        "max_attempts": current_step.max_attempts,
+                                    })
+                                    .to_string(),
+                                });
+                                continue;
                             }
-                            if let Ok(signals) = store.poll_workflow_advance_signals(workflow_id) {
-                                if let Some(sig) = signals.first() {
-                                    let now2 = chrono::Utc::now().to_rfc3339();
-                                    let _ = store.consume_workflow_advance_signal(sig.id, &now2);
-                                    break;
-                                }
-                            }
-                            std::thread::sleep(std::time::Duration::from_secs(2));
                         }
-
-                        // 恢复 running
-                        let now = chrono::Utc::now().to_rfc3339();
-                        store
-                            .update_workflow_status(workflow_id, "running", &now)
-                            .map_err(|e| ExecuteError::Db(e.to_string()))?;
-                        broadcaster.lock().unwrap().broadcast(crate::sse::SseEvent {
-                            event_type: "workflow_status".to_string(),
-                            data: workflow_id.to_string(),
-                        });
+                        return Err(ExecuteError::JobFailed(reason));
                     }
+
+                    // 读取日志作为下一步上下文，同时存入 step_logs
+                    let _ = store.update_workflow_step_context_metrics(
+                        &current_step.id,
+                        step_prompt.input_context_bytes as i64,
+                        Some(output_context_bytes),
+                    );
+                    step_logs.insert(current_step.step_order, logs.clone());
+                    previous_logs = Some(logs);
+
+                    broadcaster.lock().unwrap().broadcast(crate::sse::SseEvent {
+                        event_type: "workflow_step_status".to_string(),
+                        data: serde_json::json!({
+                            "workflow_id": workflow_id,
+                            "step_id": current_step.id,
+                            "step_order": current_step.step_order,
+                            "status": "succeeded",
+                            "attempt": current_step.attempt,
+                            "max_attempts": current_step.max_attempts,
+                        })
+                        .to_string(),
+                    });
+
+                    // manual 模式：如果还有未完成的步骤，暂停等待推进信号
+                    if advance_mode == "manual" {
+                        let has_pending = steps.iter().any(|s| {
+                            s.step_order > current_step.step_order && s.status != "succeeded"
+                        });
+                        if has_pending {
+                            let now = chrono::Utc::now().to_rfc3339();
+                            store
+                                .update_workflow_status(workflow_id, "paused", &now)
+                                .map_err(|e| ExecuteError::Db(e.to_string()))?;
+                            broadcaster.lock().unwrap().broadcast(crate::sse::SseEvent {
+                                event_type: "workflow_status".to_string(),
+                                data: workflow_id.to_string(),
+                            });
+
+                            // 轮询等待 advance signal（2s 间隔）
+                            loop {
+                                if cancel_flag.load(Ordering::SeqCst) {
+                                    return Err(ExecuteError::Cancelled);
+                                }
+                                if let Ok(signals) =
+                                    store.poll_workflow_advance_signals(workflow_id)
+                                {
+                                    if let Some(sig) = signals.first() {
+                                        let now2 = chrono::Utc::now().to_rfc3339();
+                                        let _ =
+                                            store.consume_workflow_advance_signal(sig.id, &now2);
+                                        break;
+                                    }
+                                }
+                                std::thread::sleep(std::time::Duration::from_secs(2));
+                            }
+
+                            // 恢复 running
+                            let now = chrono::Utc::now().to_rfc3339();
+                            store
+                                .update_workflow_status(workflow_id, "running", &now)
+                                .map_err(|e| ExecuteError::Db(e.to_string()))?;
+                            broadcaster.lock().unwrap().broadcast(crate::sse::SseEvent {
+                                event_type: "workflow_status".to_string(),
+                                data: workflow_id.to_string(),
+                            });
+                        }
+                    }
+                    break;
                 }
-            }
-            Err(e) => {
-                let now = chrono::Utc::now().to_rfc3339();
-                let store =
-                    AuditStore::open(db_path).map_err(|e| ExecuteError::Db(e.to_string()))?;
-                let _ = store.update_workflow_step_status(&step.id, "failed", Some(&now));
-                let _ = store.update_workflow_step_failure_class(&step.id, "submit_failed");
-                return Err(ExecuteError::JobFailed(e));
+                Err(e) => {
+                    let now = chrono::Utc::now().to_rfc3339();
+                    let store =
+                        AuditStore::open(db_path).map_err(|e| ExecuteError::Db(e.to_string()))?;
+                    let _ = store.finish_workflow_step_attempt(
+                        &attempt_id,
+                        WorkflowAttemptStatus::Failed,
+                        Some(WorkflowFailureClass::SubmitFailed),
+                        Some(&e),
+                        &now,
+                        0,
+                    );
+                    let _ =
+                        store.update_workflow_step_status(&current_step.id, "failed", Some(&now));
+                    let _ = store.update_workflow_step_failure_class(
+                        &current_step.id,
+                        WorkflowFailureClass::SubmitFailed,
+                    );
+                    if should_retry_step(&current_step, WorkflowFailureClass::SubmitFailed) {
+                        if store
+                            .prepare_workflow_step_retry(&current_step.id, &now)
+                            .map_err(|e| ExecuteError::Db(e.to_string()))?
+                            .is_some()
+                        {
+                            current_step = store
+                                .get_workflow_step(&current_step.id)
+                                .map_err(|e| ExecuteError::Db(e.to_string()))?
+                                .ok_or_else(|| {
+                                    ExecuteError::Db("workflow step not found".to_string())
+                                })?;
+                            continue;
+                        }
+                    }
+                    return Err(ExecuteError::JobFailed(e));
+                }
             }
         }
     }
@@ -566,9 +649,9 @@ fn bound_workflow_context(input: &str) -> String {
     format!("[context truncated to last {MAX_WORKFLOW_CONTEXT_BYTES} bytes]\n{bounded}")
 }
 
-fn classify_failure(job_status: &str, failure_reason: Option<&str>) -> &'static str {
+fn classify_failure(job_status: &str, failure_reason: Option<&str>) -> WorkflowFailureClass {
     if job_status == "cancelled" {
-        return "cancelled";
+        return WorkflowFailureClass::Cancelled;
     }
     let reason = failure_reason.unwrap_or("").to_ascii_lowercase();
     if reason.contains("timeout")
@@ -576,10 +659,14 @@ fn classify_failure(job_status: &str, failure_reason: Option<&str>) -> &'static 
         || reason.contains("deadline")
         || reason.contains("idle")
     {
-        "timeout"
+        WorkflowFailureClass::Timeout
     } else {
-        "process_failed"
+        WorkflowFailureClass::ProcessFailed
     }
+}
+
+fn should_retry_step(step: &WorkflowStepRow, failure_class: WorkflowFailureClass) -> bool {
+    failure_class != WorkflowFailureClass::Cancelled && step.attempt < step.max_attempts
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -806,6 +893,26 @@ pub fn handle_get_workflow(
     let step_values: Vec<serde_json::Value> = steps
         .iter()
         .map(|s| {
+            let attempts: Vec<serde_json::Value> = store
+                .list_workflow_step_attempts(&s.id)
+                .unwrap_or_default()
+                .iter()
+                .map(|a| {
+                    serde_json::json!({
+                        "id": a.id,
+                        "attempt": a.attempt,
+                        "idempotency_key": a.idempotency_key,
+                        "job_id": a.job_id,
+                        "status": a.status,
+                        "failure_class": a.failure_class,
+                        "failure_reason": a.failure_reason,
+                        "started_at": a.started_at,
+                        "finished_at": a.finished_at,
+                        "input_context_bytes": a.input_context_bytes,
+                        "output_context_bytes": a.output_context_bytes,
+                    })
+                })
+                .collect();
             serde_json::json!({
                 "id": s.id,
                 "step_order": s.step_order,
@@ -831,6 +938,7 @@ pub fn handle_get_workflow(
                 "output_context_bytes": s.output_context_bytes,
                 "redaction_policy": s.redaction_policy,
                 "failure_class": s.failure_class,
+                "attempts": attempts,
             })
         })
         .collect();
