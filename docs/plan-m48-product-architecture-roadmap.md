@@ -14,7 +14,8 @@
 - M51 Hook Strategy Config v2 已完成：`EventConfig` 增加 decision/completion/timeout strategy schema；`PermissionRequest` 进入 Evaluate 阻断路径；`PostToolUse` 进入 after-hook observation 审计路径；Hook tab 展示 event strategy。
 - M52 Orchestration HA 第一片已完成：workflow schema 增加 attempt/idempotency/retry/context/redaction 元数据；Bridge 启动恢复 stale running/paused workflow；step 下游上下文增加脱敏与 64KB 上限。
 - M52 Orchestration HA 第二片已完成：新增 `workflow_step_attempts` attempt 历史表；retry 不覆盖上一轮 job；workflow runner 按 retry_budget 自动重试非 cancelled 失败；状态/失败分类在 Rust 内部收口为 enum，DB/API 仍保持稳定字符串。
-- 下一步：M52 剩余部分，范围限定为 fallback 策略、hard_deadline 接线与 workflow UI 可观测。
+- M52 Orchestration HA 第三片已完成：step attempt 写入 `hard_deadline_at`；workflow detail 批量返回 attempts；Bridge Workflows UI 展示 attempt/retry/deadline/context/failure；修复重新运行覆盖旧 attempt、cancel 后继续 retry、cancelled 被写成 failed、旧数据 attempts backfill。
+- 下一步：M52 剩余部分，范围限定为 fallback 策略与更细的 workflow UI 操作。
 
 ---
 

@@ -190,6 +190,15 @@ impl JobRunner {
             .collect()
     }
 
+    /// 返回指定 job kind 的运行超时秒数，用于 workflow step 写入 deadline 可观测字段。
+    pub fn timeout_secs_for_kind(&self, kind: &str) -> u64 {
+        if kind == "agent_prompt" {
+            self.agent_prompt_timeout_secs
+        } else {
+            self.timeout_secs
+        }
+    }
+
     /// 提交并执行一个 job。
     /// concurrency check → DB 持久化 → runtime drift 检测 → 构建命令 → 后台线程执行 → SSE 广播。
     /// custom_prompt 类型特殊处理：只存储不执行。
@@ -575,6 +584,7 @@ impl JobRunner {
         prompt: &str,
         conversation_id: Option<&str>,
         workflow_id: Option<&str>,
+        workflow_step_id: Option<&str>,
     ) -> Result<String, String> {
         // 1. 等前一个 job 完成（如果有）
         {
@@ -648,6 +658,9 @@ impl JobRunner {
                 workflow_id,
             )
             .map_err(|e| format!("insert job: {e}"))?;
+        if let Some(step_id) = workflow_step_id {
+            let _ = store.update_workflow_step_job(step_id, &job_id);
+        }
 
         // 5a. Register completion observer for agent_prompt workflow steps
         if step_kind == "agent_prompt" {
@@ -664,7 +677,7 @@ impl JobRunner {
                 &observer_id,
                 Some(&job_id),
                 workflow_id,
-                None, // workflow_step_id — 绑定发生在 workflow 执行器中
+                workflow_step_id,
                 conversation_id,
                 provider,
                 None, // transcript_path

@@ -15,8 +15,8 @@ const WORKFLOW_STEP_COLUMNS: &str =
     redaction_policy, failure_class";
 
 const WORKFLOW_ATTEMPT_COLUMNS: &str = "id, workflow_step_id, workflow_id, attempt,
-    idempotency_key, job_id, status, failure_class, failure_reason, started_at, finished_at,
-    input_context_bytes, output_context_bytes, created_at, updated_at";
+    idempotency_key, job_id, status, failure_class, failure_reason, started_at, hard_deadline_at,
+    finished_at, input_context_bytes, output_context_bytes, created_at, updated_at";
 
 /// 工作流步骤状态枚举。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,6 +141,7 @@ pub struct WorkflowStepAttemptRow {
     pub failure_class: Option<String>,
     pub failure_reason: Option<String>,
     pub started_at: String,
+    pub hard_deadline_at: Option<String>,
     pub finished_at: Option<String>,
     pub input_context_bytes: i64,
     pub output_context_bytes: i64,
@@ -219,11 +220,12 @@ impl AuditStore {
             failure_class: row.get(7)?,
             failure_reason: row.get(8)?,
             started_at: row.get(9)?,
-            finished_at: row.get(10)?,
-            input_context_bytes: row.get(11)?,
-            output_context_bytes: row.get(12)?,
-            created_at: row.get(13)?,
-            updated_at: row.get(14)?,
+            hard_deadline_at: row.get(10)?,
+            finished_at: row.get(11)?,
+            input_context_bytes: row.get(12)?,
+            output_context_bytes: row.get(13)?,
+            created_at: row.get(14)?,
+            updated_at: row.get(15)?,
         })
     }
 
@@ -626,6 +628,7 @@ impl AuditStore {
         &self,
         step: &WorkflowStepRow,
         input_context_bytes: i64,
+        hard_deadline_at: Option<&str>,
         started_at: &str,
     ) -> AgentAspectResult<String> {
         let attempt = step.attempt.max(1);
@@ -636,8 +639,8 @@ impl AuditStore {
             .execute(
                 "INSERT OR IGNORE INTO workflow_step_attempts
                  (id, workflow_step_id, workflow_id, attempt, idempotency_key, status,
-                  started_at, input_context_bytes, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?7, ?7)",
+                  started_at, hard_deadline_at, input_context_bytes, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?7, ?7)",
                 rusqlite::params![
                     attempt_id,
                     step.id,
@@ -646,6 +649,7 @@ impl AuditStore {
                     idempotency_key,
                     running,
                     started_at,
+                    hard_deadline_at,
                     input_context_bytes,
                 ],
             )
@@ -656,6 +660,7 @@ impl AuditStore {
                  SET status = 'running',
                      started_at = COALESCE(started_at, ?5),
                      heartbeat_at = ?5,
+                     hard_deadline_at = ?6,
                      finished_at = NULL,
                      attempt_id = ?2,
                      idempotency_key = ?3,
@@ -667,7 +672,8 @@ impl AuditStore {
                     attempt_id,
                     idempotency_key,
                     input_context_bytes,
-                    started_at
+                    started_at,
+                    hard_deadline_at,
                 ],
             )
             .map_err(AgentAspectError::UpdateWorkflowStep)?;
@@ -777,6 +783,65 @@ impl AuditStore {
         }
     }
 
+    /// 准备一次新的 workflow run。
+    ///
+    /// 已有 attempt 历史的 step 会开启新的 attempt 区间，避免重新运行 failed workflow 时覆盖旧 job。
+    /// 从未执行过的 pending step 保持 attempt 1。
+    pub fn prepare_workflow_step_for_run(
+        &self,
+        step: &WorkflowStepRow,
+    ) -> AgentAspectResult<usize> {
+        let attempt_count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM workflow_step_attempts WHERE workflow_step_id = ?1",
+                rusqlite::params![step.id],
+                |row| row.get(0),
+            )
+            .map_err(AgentAspectError::QueryWorkflowStep)?;
+        let has_history = attempt_count > 0 || step.job_id.is_some();
+        let next_attempt = if has_history {
+            step.max_attempts + 1
+        } else {
+            step.attempt.max(1)
+        };
+        let max_attempts = if has_history {
+            next_attempt + step.retry_budget
+        } else {
+            step.max_attempts.max(next_attempt)
+        };
+        let attempt_id = format!("{}:attempt:{next_attempt}", step.id);
+        let idempotency_key = format!("{}:{}:{next_attempt}", step.workflow_id, step.step_order);
+        let rows = self
+            .conn
+            .execute(
+                "UPDATE workflow_steps
+                 SET status = 'pending',
+                     job_id = NULL,
+                     started_at = NULL,
+                     finished_at = NULL,
+                     heartbeat_at = NULL,
+                     hard_deadline_at = NULL,
+                     attempt = ?2,
+                     max_attempts = ?3,
+                     attempt_id = ?4,
+                     idempotency_key = ?5,
+                     failure_class = NULL,
+                     input_context_bytes = 0,
+                     output_context_bytes = 0
+                 WHERE id = ?1",
+                rusqlite::params![
+                    step.id,
+                    next_attempt,
+                    max_attempts,
+                    attempt_id,
+                    idempotency_key
+                ],
+            )
+            .map_err(AgentAspectError::UpdateWorkflowStep)?;
+        Ok(rows)
+    }
+
     /// 查询某个 step 的 attempt 历史。
     pub fn list_workflow_step_attempts(
         &self,
@@ -795,6 +860,31 @@ impl AuditStore {
         let rows = stmt
             .query_map(
                 rusqlite::params![step_id],
+                Self::map_workflow_step_attempt_row,
+            )
+            .map_err(AgentAspectError::QueryWorkflowStep)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(AgentAspectError::QueryWorkflowStep)
+    }
+
+    /// 批量查询一个 workflow 下的所有 step attempt。
+    pub fn list_workflow_attempts(
+        &self,
+        workflow_id: &str,
+    ) -> AgentAspectResult<Vec<WorkflowStepAttemptRow>> {
+        let sql = format!(
+            "SELECT {WORKFLOW_ATTEMPT_COLUMNS}
+             FROM workflow_step_attempts
+             WHERE workflow_id = ?1
+             ORDER BY workflow_step_id ASC, attempt ASC"
+        );
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(AgentAspectError::QueryWorkflowStep)?;
+        let rows = stmt
+            .query_map(
+                rusqlite::params![workflow_id],
                 Self::map_workflow_step_attempt_row,
             )
             .map_err(AgentAspectError::QueryWorkflowStep)?;
@@ -1116,7 +1206,9 @@ mod tests {
             .unwrap();
 
         let step = store.get_workflow_step("s1").unwrap().unwrap();
-        let attempt_1 = store.begin_workflow_step_attempt(&step, 11, now).unwrap();
+        let attempt_1 = store
+            .begin_workflow_step_attempt(&step, 11, Some(later), now)
+            .unwrap();
         store
             .set_workflow_step_current_job("s1", &attempt_1, "job-1")
             .unwrap();
@@ -1142,7 +1234,9 @@ mod tests {
         let step = store.get_workflow_step("s1").unwrap().unwrap();
         assert_eq!(step.attempt, 2);
         assert_eq!(step.job_id, None);
-        let attempt_2 = store.begin_workflow_step_attempt(&step, 33, later).unwrap();
+        let attempt_2 = store
+            .begin_workflow_step_attempt(&step, 33, Some(later), later)
+            .unwrap();
         store
             .set_workflow_step_current_job("s1", &attempt_2, "job-2")
             .unwrap();
@@ -1162,9 +1256,93 @@ mod tests {
         assert_eq!(attempts[0].attempt, 1);
         assert_eq!(attempts[0].job_id.as_deref(), Some("job-1"));
         assert_eq!(attempts[0].status, "failed");
+        assert_eq!(attempts[0].hard_deadline_at.as_deref(), Some(later));
         assert_eq!(attempts[1].attempt, 2);
         assert_eq!(attempts[1].job_id.as_deref(), Some("job-2"));
         assert_eq!(attempts[1].status, "succeeded");
+    }
+
+    #[test]
+    fn prepare_workflow_step_for_run_starts_new_attempt_epoch() {
+        let store = AuditStore::open_in_memory().unwrap();
+        let now = "2026-05-04T10:00:00Z";
+
+        store.insert_workflow("wf1", "Test", "", now).unwrap();
+        store
+            .insert_workflow_step_with_ha(
+                "s1",
+                "wf1",
+                0,
+                "agent_prompt",
+                None,
+                None,
+                "step 1",
+                "none",
+                None,
+                1,
+                "basic",
+                now,
+            )
+            .unwrap();
+
+        let step = store.get_workflow_step("s1").unwrap().unwrap();
+        let attempt_1 = store
+            .begin_workflow_step_attempt(&step, 0, Some(now), now)
+            .unwrap();
+        store
+            .set_workflow_step_current_job("s1", &attempt_1, "job-1")
+            .unwrap();
+        store
+            .finish_workflow_step_attempt(
+                &attempt_1,
+                WorkflowAttemptStatus::Failed,
+                Some(WorkflowFailureClass::ProcessFailed),
+                Some("failed"),
+                now,
+                0,
+            )
+            .unwrap();
+        store
+            .update_workflow_step_status("s1", "failed", Some(now))
+            .unwrap();
+        store.prepare_workflow_step_retry("s1", now).unwrap();
+
+        let step = store.get_workflow_step("s1").unwrap().unwrap();
+        let attempt_2 = store
+            .begin_workflow_step_attempt(&step, 0, Some(now), now)
+            .unwrap();
+        store
+            .set_workflow_step_current_job("s1", &attempt_2, "job-2")
+            .unwrap();
+        store
+            .finish_workflow_step_attempt(
+                &attempt_2,
+                WorkflowAttemptStatus::Failed,
+                Some(WorkflowFailureClass::ProcessFailed),
+                Some("failed again"),
+                now,
+                0,
+            )
+            .unwrap();
+        store
+            .update_workflow_step_status("s1", "failed", Some(now))
+            .unwrap();
+
+        let exhausted = store.get_workflow_step("s1").unwrap().unwrap();
+        assert_eq!(exhausted.attempt, 2);
+        assert_eq!(exhausted.max_attempts, 2);
+
+        store.prepare_workflow_step_for_run(&exhausted).unwrap();
+        let rerun = store.get_workflow_step("s1").unwrap().unwrap();
+        assert_eq!(rerun.status, "pending");
+        assert_eq!(rerun.job_id, None);
+        assert_eq!(rerun.attempt, 3);
+        assert_eq!(rerun.max_attempts, 4);
+
+        let attempts = store.list_workflow_attempts("wf1").unwrap();
+        assert_eq!(attempts.len(), 2);
+        assert_eq!(attempts[0].job_id.as_deref(), Some("job-1"));
+        assert_eq!(attempts[1].job_id.as_deref(), Some("job-2"));
     }
 
     #[test]

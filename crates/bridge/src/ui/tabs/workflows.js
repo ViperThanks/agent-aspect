@@ -288,6 +288,14 @@ function renderWfDetail() {
     const connClass = 'wf-step-connector ' + (s.status === 'succeeded' ? 'done' : '');
     const draggable = canEdit ? ' draggable="true" data-step-id="' + esc(s.id) + '" data-step-idx="' + i + '"' : '';
     const providerLabel = AGENTS[s.provider] || s.provider || 'unknown';
+    const attemptText = 'attempt ' + (s.attempt || 1) + '/' + (s.max_attempts || 1);
+    const retryText = (s.retry_budget || 0) > 0 ? ' · retry ' + s.retry_budget : '';
+    const deadlineText = s.hard_deadline_at ? ' · deadline ' + formatTime(s.hard_deadline_at) : '';
+    const ctxText = ((s.input_context_bytes || 0) || (s.output_context_bytes || 0))
+      ? ' · ctx ' + formatWfBytes(s.input_context_bytes || 0) + '/' + formatWfBytes(s.output_context_bytes || 0)
+      : '';
+    const failureText = s.failure_class ? ' · ' + esc(s.failure_class) : '';
+    const attemptHistory = renderWfAttempts(s.attempts || []);
     return '<div class="wf-step-item"' + draggable + '>' +
       '<div class="wf-step-timeline">' +
         (canEdit ? '<div style="cursor:grab;color:var(--dim);font-size:.7rem;margin-bottom:2px">⋮⋮</div>' : '') +
@@ -302,6 +310,8 @@ function renderWfDetail() {
         '</div>' +
         (s.project_path ? '<div class="wf-step-path">' + esc(s.project_path) + '</div>' : '') +
         '<div class="wf-step-prompt">' + esc(s.prompt) + '</div>' +
+        '<div class="wf-step-job">' + esc(attemptText + retryText + deadlineText) + ctxText + failureText + '</div>' +
+        attemptHistory +
         (s.job_id ? '<div class="wf-step-job">Job: ' + esc(s.job_id.substring(0, 8)) + '… <button class="btn btn-sm" style="font-size:.68rem;padding:1px 6px" onclick="toggleStepLogs(\'' + jsStr(s.id) + '\',\'' + jsStr(wf.id) + '\')">日志</button></div>' : '') +
         '<div id="step-logs-' + esc(s.id) + '"></div>' +
       '</div>' +
@@ -556,6 +566,24 @@ function stepStatusBadge(status) {
 function stepColor(status) {
   const colors = { pending: 'var(--dim)', running: 'var(--blue)', succeeded: 'var(--green)', failed: 'var(--red)', cancelled: 'var(--yellow)', skipped: 'var(--dim)' };
   return colors[status] || 'var(--dim)';
+}
+
+function formatWfBytes(bytes) {
+  const n = Number(bytes || 0);
+  if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + 'MB';
+  if (n >= 1024) return (n / 1024).toFixed(1) + 'KB';
+  return n + 'B';
+}
+
+function renderWfAttempts(attempts) {
+  if (!attempts || attempts.length <= 1) return '';
+  const chips = attempts.map(a => {
+    const label = '#' + a.attempt + ' ' + (a.status || 'unknown') +
+      (a.job_id ? ' · ' + String(a.job_id).substring(0, 8) : '') +
+      (a.failure_class ? ' · ' + a.failure_class : '');
+    return '<span class="wf-step-ctx">' + esc(label) + '</span>';
+  }).join('');
+  return '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px">' + chips + '</div>';
 }
 
 /* ---------- Tab Entry ---------- */

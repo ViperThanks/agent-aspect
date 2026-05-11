@@ -103,7 +103,7 @@ impl WorkflowRunner {
         // 重置所有非 succeeded 的步骤为 pending（支持重试）
         for step in &steps {
             if step.status != "succeeded" {
-                let _ = store.update_workflow_step_status(&step.id, "pending", None);
+                let _ = store.prepare_workflow_step_for_run(step);
             }
         }
 
@@ -156,6 +156,15 @@ impl WorkflowRunner {
             if let Some(ref running) = *guard {
                 if running.workflow_id == workflow_id {
                     running.cancel_flag.store(true, Ordering::SeqCst);
+                    if let Ok(store) = AuditStore::open(&self.db_path) {
+                        if let Ok(steps) = store.get_workflow_steps(workflow_id) {
+                            for step in steps.iter().filter(|s| s.status == "running") {
+                                if let Some(ref job_id) = step.job_id {
+                                    let _ = self.job_runner.cancel(job_id);
+                                }
+                            }
+                        }
+                    }
                     return Ok(true);
                 }
             }
@@ -309,6 +318,10 @@ fn execute_workflow_inner(
 
         let mut current_step = step.clone();
         loop {
+            if cancel_flag.load(Ordering::SeqCst) {
+                let _ = store.update_workflow_step_status(&current_step.id, "cancelled", None);
+                return Err(ExecuteError::Cancelled);
+            }
             // 构建 prompt：优先使用 context_from_step 指定的 step 日志，否则 fallback 到紧邻前一步
             let context_logs = current_step
                 .context_from_step
@@ -316,10 +329,14 @@ fn execute_workflow_inner(
                 .or(previous_logs.as_deref());
             let step_prompt = build_step_prompt(&current_step, context_logs);
             let now = chrono::Utc::now().to_rfc3339();
+            let timeout_secs = job_runner.timeout_secs_for_kind(&current_step.kind);
+            let hard_deadline_at =
+                (chrono::Utc::now() + chrono::Duration::seconds(timeout_secs as i64)).to_rfc3339();
             let attempt_id = store
                 .begin_workflow_step_attempt(
                     &current_step,
                     step_prompt.input_context_bytes as i64,
+                    Some(&hard_deadline_at),
                     &now,
                 )
                 .map_err(|e| ExecuteError::Db(e.to_string()))?;
@@ -333,6 +350,7 @@ fn execute_workflow_inner(
                     "status": "running",
                     "attempt": current_step.attempt,
                     "max_attempts": current_step.max_attempts,
+                    "hard_deadline_at": hard_deadline_at,
                 })
                 .to_string(),
             });
@@ -348,6 +366,7 @@ fn execute_workflow_inner(
                 &step_prompt.prompt,
                 None, // conversation_id: workflow steps 每步独立
                 Some(workflow_id),
+                Some(&current_step.id),
             );
 
             match job_result {
@@ -366,11 +385,7 @@ fn execute_workflow_inner(
                     let failure_reason = job.as_ref().and_then(|j| j.failure_reason.clone());
 
                     let now = chrono::Utc::now().to_rfc3339();
-                    let step_status = if job_status == "succeeded" {
-                        WorkflowAttemptStatus::Succeeded
-                    } else {
-                        WorkflowAttemptStatus::Failed
-                    };
+                    let step_status = attempt_status_for_job(job_status);
                     let logs =
                         read_job_logs_for_context(&store, &job_id, &current_step.context_strategy);
                     let output_context_bytes = logs.len() as i64;
@@ -395,12 +410,23 @@ fn execute_workflow_inner(
                         )
                         .map_err(|e| ExecuteError::Db(e.to_string()))?;
 
+                    if step_status == WorkflowAttemptStatus::Cancelled {
+                        let _ = store.update_workflow_step_failure_class(
+                            &current_step.id,
+                            WorkflowFailureClass::Cancelled,
+                        );
+                        return Err(ExecuteError::Cancelled);
+                    }
+
                     if step_status == WorkflowAttemptStatus::Failed {
                         let reason = failure_reason.unwrap_or_default();
                         let failure_class =
                             failure_class.unwrap_or(WorkflowFailureClass::ProcessFailed);
                         let _ = store
                             .update_workflow_step_failure_class(&current_step.id, failure_class);
+                        if cancel_flag.load(Ordering::SeqCst) {
+                            return Err(ExecuteError::Cancelled);
+                        }
                         if should_retry_step(&current_step, failure_class) {
                             if store
                                 .prepare_workflow_step_retry(&current_step.id, &now)
@@ -422,6 +448,7 @@ fn execute_workflow_inner(
                                         "status": "pending",
                                         "attempt": current_step.attempt,
                                         "max_attempts": current_step.max_attempts,
+                                        "hard_deadline_at": hard_deadline_at,
                                     })
                                     .to_string(),
                                 });
@@ -449,6 +476,7 @@ fn execute_workflow_inner(
                             "status": "succeeded",
                             "attempt": current_step.attempt,
                             "max_attempts": current_step.max_attempts,
+                            "hard_deadline_at": hard_deadline_at,
                         })
                         .to_string(),
                     });
@@ -517,6 +545,9 @@ fn execute_workflow_inner(
                         &current_step.id,
                         WorkflowFailureClass::SubmitFailed,
                     );
+                    if cancel_flag.load(Ordering::SeqCst) {
+                        return Err(ExecuteError::Cancelled);
+                    }
                     if should_retry_step(&current_step, WorkflowFailureClass::SubmitFailed) {
                         if store
                             .prepare_workflow_step_retry(&current_step.id, &now)
@@ -662,6 +693,14 @@ fn classify_failure(job_status: &str, failure_reason: Option<&str>) -> WorkflowF
         WorkflowFailureClass::Timeout
     } else {
         WorkflowFailureClass::ProcessFailed
+    }
+}
+
+fn attempt_status_for_job(job_status: &str) -> WorkflowAttemptStatus {
+    match job_status {
+        "succeeded" => WorkflowAttemptStatus::Succeeded,
+        "cancelled" => WorkflowAttemptStatus::Cancelled,
+        _ => WorkflowAttemptStatus::Failed,
     }
 }
 
@@ -889,13 +928,28 @@ pub fn handle_get_workflow(
         Ok(s) => s,
         Err(e) => return json_response(500, &serde_json::json!({"error": e.to_string()})),
     };
+    let attempts = match store.list_workflow_attempts(workflow_id) {
+        Ok(a) => a,
+        Err(e) => return json_response(500, &serde_json::json!({"error": e.to_string()})),
+    };
+    let mut attempts_by_step: HashMap<
+        String,
+        Vec<agent_aspect_core::audit::WorkflowStepAttemptRow>,
+    > = HashMap::new();
+    for attempt in attempts {
+        attempts_by_step
+            .entry(attempt.workflow_step_id.clone())
+            .or_default()
+            .push(attempt);
+    }
 
     let step_values: Vec<serde_json::Value> = steps
         .iter()
         .map(|s| {
-            let attempts: Vec<serde_json::Value> = store
-                .list_workflow_step_attempts(&s.id)
-                .unwrap_or_default()
+            let attempts: Vec<serde_json::Value> = attempts_by_step
+                .get(&s.id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[])
                 .iter()
                 .map(|a| {
                     serde_json::json!({
@@ -907,6 +961,7 @@ pub fn handle_get_workflow(
                         "failure_class": a.failure_class,
                         "failure_reason": a.failure_reason,
                         "started_at": a.started_at,
+                        "hard_deadline_at": a.hard_deadline_at,
                         "finished_at": a.finished_at,
                         "input_context_bytes": a.input_context_bytes,
                         "output_context_bytes": a.output_context_bytes,

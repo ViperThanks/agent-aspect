@@ -252,6 +252,7 @@ impl AuditStore {
         self.migrate_v19_completion_observers()?;
         self.migrate_v20_workflow_ha()?;
         self.migrate_v21_workflow_attempts()?;
+        self.migrate_v22_workflow_attempt_deadline()?;
         self.conn
             .execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_conv_agent ON events(conversation_id, agent)",
@@ -689,6 +690,7 @@ impl AuditStore {
                     failure_class TEXT,
                     failure_reason TEXT,
                     started_at TEXT NOT NULL,
+                    hard_deadline_at TEXT,
                     finished_at TEXT,
                     input_context_bytes INTEGER NOT NULL DEFAULT 0,
                     output_context_bytes INTEGER NOT NULL DEFAULT 0,
@@ -703,6 +705,49 @@ impl AuditStore {
                     ON workflow_step_attempts(workflow_id, workflow_step_id, attempt);",
             )
             .map_err(AgentAspectError::MigrateConversationSchema)?;
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO workflow_step_attempts
+                    (id, workflow_step_id, workflow_id, attempt, idempotency_key, job_id, status,
+                     failure_class, started_at, finished_at, hard_deadline_at,
+                     input_context_bytes, output_context_bytes, created_at, updated_at)
+                 SELECT
+                    COALESCE(attempt_id, id || ':attempt:' || attempt),
+                    id,
+                    workflow_id,
+                    attempt,
+                    COALESCE(idempotency_key, workflow_id || ':' || step_order || ':' || attempt),
+                    job_id,
+                    CASE
+                        WHEN status IN ('running','succeeded','failed','cancelled','skipped') THEN status
+                        ELSE 'skipped'
+                    END,
+                    failure_class,
+                    COALESCE(started_at, created_at),
+                    finished_at,
+                    hard_deadline_at,
+                    input_context_bytes,
+                    output_context_bytes,
+                    created_at,
+                    COALESCE(finished_at, started_at, created_at)
+                 FROM workflow_steps
+                 WHERE job_id IS NOT NULL",
+                [],
+            )
+            .map_err(AgentAspectError::MigrateConversationSchema)?;
+        Ok(())
+    }
+
+    /// v22: workflow step attempts 增加 hard_deadline_at。
+    fn migrate_v22_workflow_attempt_deadline(&self) -> AgentAspectResult<()> {
+        if !self.column_exists("workflow_step_attempts", "hard_deadline_at")? {
+            self.conn
+                .execute(
+                    "ALTER TABLE workflow_step_attempts ADD COLUMN hard_deadline_at TEXT",
+                    [],
+                )
+                .map_err(AgentAspectError::MigrateConversationSchema)?;
+        }
         Ok(())
     }
 
@@ -2197,5 +2242,84 @@ mod tests {
             .unwrap();
         assert!(found.is_some(), "project_path fallback must match");
         assert_eq!(found.unwrap().id, "j-unbound");
+    }
+
+    #[test]
+    fn migrates_existing_workflow_step_job_into_attempt_history() {
+        let db_path = std::env::temp_dir().join(format!(
+            "agent-aspect-workflow-attempt-backfill-{}.db",
+            uuid::Uuid::now_v7()
+        ));
+        let now = "2026-05-10T10:00:00Z";
+
+        {
+            let conn = Connection::open(&db_path).expect("create legacy db");
+            conn.execute_batch(
+                "CREATE TABLE workflows (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL DEFAULT 'draft'
+                        CHECK(status IN ('draft','running','paused','succeeded','failed','cancelled')),
+                    advance_mode TEXT NOT NULL DEFAULT 'auto'
+                        CHECK(advance_mode IN ('auto','manual')),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE workflow_steps (
+                    id TEXT PRIMARY KEY,
+                    workflow_id TEXT NOT NULL,
+                    step_order INTEGER NOT NULL,
+                    kind TEXT NOT NULL DEFAULT 'agent_prompt',
+                    provider TEXT,
+                    project_path TEXT,
+                    prompt TEXT NOT NULL DEFAULT '',
+                    context_strategy TEXT NOT NULL DEFAULT 'none',
+                    context_from_step INTEGER,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    job_id TEXT,
+                    started_at TEXT,
+                    attempt_id TEXT,
+                    idempotency_key TEXT,
+                    attempt INTEGER NOT NULL DEFAULT 1,
+                    max_attempts INTEGER NOT NULL DEFAULT 1,
+                    retry_budget INTEGER NOT NULL DEFAULT 0,
+                    heartbeat_at TEXT,
+                    hard_deadline_at TEXT,
+                    input_context_bytes INTEGER NOT NULL DEFAULT 0,
+                    output_context_bytes INTEGER NOT NULL DEFAULT 0,
+                    redaction_policy TEXT NOT NULL DEFAULT 'basic',
+                    failure_class TEXT,
+                    created_at TEXT NOT NULL,
+                    finished_at TEXT
+                );
+                INSERT INTO workflows (id, name, status, advance_mode, created_at, updated_at)
+                VALUES ('wf1', 'wf', 'failed', 'auto', '2026-05-10T10:00:00Z', '2026-05-10T10:01:00Z');
+                INSERT INTO workflow_steps (
+                    id, workflow_id, step_order, kind, prompt, context_strategy, status, job_id,
+                    started_at, attempt_id, idempotency_key, attempt, max_attempts, retry_budget,
+                    input_context_bytes, output_context_bytes, created_at, finished_at, failure_class
+                )
+                VALUES (
+                    's1', 'wf1', 0, 'agent_prompt', 'p', 'none', 'failed', 'job-1',
+                    '2026-05-10T10:00:10Z', 's1:attempt:1', 'wf1:0:1', 1, 1, 0,
+                    12, 34, '2026-05-10T10:00:00Z', '2026-05-10T10:01:00Z', 'process_failed'
+                );",
+            )
+            .expect("seed legacy workflow schema");
+        }
+
+        let store = AuditStore::open(&db_path).expect("migrate db");
+        let attempts = store.list_workflow_attempts("wf1").unwrap();
+        assert_eq!(attempts.len(), 1);
+        assert_eq!(attempts[0].id, "s1:attempt:1");
+        assert_eq!(attempts[0].job_id.as_deref(), Some("job-1"));
+        assert_eq!(attempts[0].status, "failed");
+        assert_eq!(attempts[0].failure_class.as_deref(), Some("process_failed"));
+        assert_eq!(attempts[0].input_context_bytes, 12);
+        assert_eq!(attempts[0].output_context_bytes, 34);
+
+        let _ = now;
+        fs::remove_file(&db_path).ok();
     }
 }
