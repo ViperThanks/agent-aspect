@@ -6,7 +6,7 @@
 const { buildNewJobBody, buildContinueJobBody } = require('../../../shared_ui/job_body.js');
 const { shortId, escHtml, jsStr } = require('../../../shared_ui/view_model.js');
 const { runtimeAlertCard, runtimeHealthBadge } = require('../../../shared_ui/runtime_health.js');
-const { parseJwtExpMs, shouldRenewToken, shouldRunHeavyPoll } = require('./app.js');
+const { parseJwtExpMs, shouldRenewToken, shouldRunHeavyPoll, relayAuthErrorMessage } = require('./app.js');
 
 // ---- Test runner ----
 
@@ -238,6 +238,12 @@ console.log('mobile session lifecycle helpers');
   assert(!shouldRunHeavyPoll('hidden', 'online'), 'hidden page must not run heavy poll');
   assert(!shouldRunHeavyPoll('visible', 'offline'), 'offline state must not run heavy poll');
   assert(shouldRunHeavyPoll('visible', 'online'), 'visible online page may poll');
+})();
+
+(function test_relay_auth_error_message() {
+  assertEqual(relayAuthErrorMessage('token_replayed'), '配对已失效，请重新连接', 'token_replayed has actionable message');
+  assertEqual(relayAuthErrorMessage('wrong_token_role'), 'Token 类型错误，请使用 Client Token', 'wrong role message mentions client token');
+  assertEqual(relayAuthErrorMessage('token_expired'), 'Token 已过期，请重新连接', 'expired token message asks reconnect');
 })();
 
 // ---- Summary ----

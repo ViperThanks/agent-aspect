@@ -59,7 +59,7 @@ async function api(path, opts) {
     var data = await res.json().catch(function () { return {}; });
     var err = data.error || '';
     console.debug('[api] auth/forbidden:', err || res.status);
-    if (err === 'sid_not_registered') {
+    if (err === 'sid_not_registered' || err === 'token_replayed') {
       throw { code: 'auth_failed', message: '配对已失效，请重新连接' };
     }
     if (err === 'token_revoked') {

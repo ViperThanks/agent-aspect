@@ -124,6 +124,14 @@ function storeClientToken(token, expiresAtMs) {
   }
 }
 
+function relayAuthErrorMessage(err) {
+  if (err === 'sid_not_registered' || err === 'token_replayed') return '配对已失效，请重新连接';
+  if (err === 'token_revoked') return 'Token 已被轮换，请重新连接';
+  if (err === 'wrong_token_role') return 'Token 类型错误，请使用 Client Token';
+  if (err === 'token_expired') return 'Token 已过期，请重新连接';
+  return err || 'Token 无效或已过期';
+}
+
 function saveToken() {
   const input = document.getElementById('token-input');
   const btn = input.nextElementSibling;
@@ -140,7 +148,9 @@ function saveToken() {
         document.getElementById('app').classList.remove('hidden');
         init();
       } else if (res.status === 401 || res.status === 403) {
-        throw { code: 'auth_failed', message: 'Token 无效或已过期' };
+        return res.json().catch(function() { return {}; }).then(function(data) {
+          throw { code: 'auth_failed', message: relayAuthErrorMessage(data.error) };
+        });
       } else {
         // Token might be valid but Mac offline — proceed optimistically
         document.getElementById('token-form').classList.add('hidden');
@@ -357,8 +367,9 @@ async function checkHealth() {
 }
 
 function showAuthError(msg) {
-  document.getElementById('token-error').textContent = msg;
   logout();
+  const el = document.getElementById('token-error');
+  if (el) el.textContent = msg || 'Token 无效，请重新连接';
 }
 
 // ============================================================
@@ -1644,6 +1655,7 @@ if (typeof module !== 'undefined' && module.exports) {
     parseJwtExpMs,
     shouldRenewToken,
     shouldRunHeavyPoll,
+    relayAuthErrorMessage,
   };
 }
 
