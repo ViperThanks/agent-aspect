@@ -12,7 +12,7 @@ const WORKFLOW_STEP_COLUMNS: &str =
     context_strategy, context_from_step, status, job_id, created_at, finished_at,
     started_at, attempt_id, idempotency_key, attempt, max_attempts, retry_budget,
     heartbeat_at, hard_deadline_at, input_context_bytes, output_context_bytes,
-    redaction_policy, failure_class";
+    redaction_policy, failure_class, fallback_provider";
 
 const WORKFLOW_ATTEMPT_COLUMNS: &str = "id, workflow_step_id, workflow_id, attempt,
     idempotency_key, job_id, status, failure_class, failure_reason, started_at, hard_deadline_at,
@@ -126,6 +126,7 @@ pub struct WorkflowStepRow {
     pub output_context_bytes: i64,
     pub redaction_policy: String,
     pub failure_class: Option<String>,
+    pub fallback_provider: Option<String>,
 }
 
 /// 工作流步骤尝试行 — 每次 retry 都产生一条独立记录。
@@ -203,6 +204,7 @@ impl AuditStore {
             output_context_bytes: row.get(22)?,
             redaction_policy: row.get(23)?,
             failure_class: row.get(24)?,
+            fallback_provider: row.get(25)?,
         })
     }
 
@@ -479,6 +481,7 @@ impl AuditStore {
             context_from_step,
             0,
             "basic",
+            None,
             created_at,
         )
     }
@@ -500,6 +503,7 @@ impl AuditStore {
         context_from_step: Option<i64>,
         retry_budget: i64,
         redaction_policy: &str,
+        fallback_provider: Option<&str>,
         created_at: &str,
     ) -> AgentAspectResult<()> {
         let retry_budget = retry_budget.clamp(0, 5);
@@ -515,8 +519,8 @@ impl AuditStore {
                 "INSERT INTO workflow_steps
                  (id, workflow_id, step_order, kind, provider, project_path, prompt,
                   context_strategy, context_from_step, status, attempt_id, idempotency_key,
-                  attempt, max_attempts, retry_budget, redaction_policy, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10, ?11, 1, ?12, ?13, ?14, ?15)",
+                  attempt, max_attempts, retry_budget, redaction_policy, fallback_provider, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'pending', ?10, ?11, 1, ?12, ?13, ?14, ?15, ?16)",
                 rusqlite::params![
                     id,
                     workflow_id,
@@ -532,6 +536,7 @@ impl AuditStore {
                     max_attempts,
                     retry_budget,
                     redaction_policy,
+                    fallback_provider,
                     created_at
                 ],
             )
@@ -773,6 +778,58 @@ impl AuditStore {
                      failure_class = NULL
                  WHERE id = ?1 AND status = 'failed'",
                 rusqlite::params![step_id, next_attempt, attempt_id, idempotency_key],
+            )
+            .map_err(AgentAspectError::UpdateWorkflowStep)?;
+        let _ = timestamp;
+        if rows == 0 {
+            Ok(None)
+        } else {
+            Ok(Some(next_attempt))
+        }
+    }
+
+    /// 将失败步骤切换到 fallback provider，并开启新的 pending attempt。
+    ///
+    /// fallback 只消费一次：切换成功后清空 `fallback_provider`，防止同一步在多个 provider
+    /// 之间来回跳转。调用方负责判定失败分类和 provider 能力。
+    pub fn prepare_workflow_step_fallback(
+        &self,
+        step_id: &str,
+        fallback_provider: &str,
+        timestamp: &str,
+    ) -> AgentAspectResult<Option<i64>> {
+        let step = match self.get_workflow_step(step_id)? {
+            Some(step) => step,
+            None => return Ok(None),
+        };
+        let next_attempt = step.max_attempts + 1;
+        let attempt_id = format!("{step_id}:attempt:{next_attempt}");
+        let idempotency_key = format!("{}:{}:{next_attempt}", step.workflow_id, step.step_order);
+        let rows = self
+            .conn
+            .execute(
+                "UPDATE workflow_steps
+                 SET status = 'pending',
+                     provider = ?2,
+                     fallback_provider = NULL,
+                     job_id = NULL,
+                     started_at = NULL,
+                     finished_at = NULL,
+                     heartbeat_at = NULL,
+                     hard_deadline_at = NULL,
+                     attempt = ?3,
+                     max_attempts = ?3,
+                     attempt_id = ?4,
+                     idempotency_key = ?5,
+                     failure_class = NULL
+                 WHERE id = ?1 AND status = 'failed'",
+                rusqlite::params![
+                    step_id,
+                    fallback_provider,
+                    next_attempt,
+                    attempt_id,
+                    idempotency_key
+                ],
             )
             .map_err(AgentAspectError::UpdateWorkflowStep)?;
         let _ = timestamp;
@@ -1161,6 +1218,7 @@ mod tests {
                 None,
                 2,
                 "basic",
+                None,
                 now,
             )
             .unwrap();
@@ -1179,6 +1237,47 @@ mod tests {
         let step = store.get_workflow_step("s1").unwrap().unwrap();
         assert_eq!(step.input_context_bytes, 128);
         assert_eq!(step.output_context_bytes, 256);
+    }
+
+    #[test]
+    fn workflow_step_fallback_switches_provider_once() {
+        let store = AuditStore::open_in_memory().unwrap();
+        let now = "2026-05-04T10:00:00Z";
+
+        store.insert_workflow("wf1", "Test", "", now).unwrap();
+        store
+            .insert_workflow_step_with_ha(
+                "s1",
+                "wf1",
+                0,
+                "agent_prompt",
+                Some("claude_code"),
+                None,
+                "step 1",
+                "none",
+                None,
+                0,
+                "basic",
+                Some("codex_cli"),
+                now,
+            )
+            .unwrap();
+        store
+            .update_workflow_step_status("s1", "failed", Some(now))
+            .unwrap();
+
+        assert_eq!(
+            store
+                .prepare_workflow_step_fallback("s1", "codex_cli", now)
+                .unwrap(),
+            Some(2)
+        );
+        let step = store.get_workflow_step("s1").unwrap().unwrap();
+        assert_eq!(step.status, "pending");
+        assert_eq!(step.provider.as_deref(), Some("codex_cli"));
+        assert_eq!(step.fallback_provider, None);
+        assert_eq!(step.attempt, 2);
+        assert_eq!(step.max_attempts, 2);
     }
 
     #[test]
@@ -1201,6 +1300,7 @@ mod tests {
                 None,
                 1,
                 "basic",
+                None,
                 now,
             )
             .unwrap();
@@ -1281,6 +1381,7 @@ mod tests {
                 None,
                 1,
                 "basic",
+                None,
                 now,
             )
             .unwrap();

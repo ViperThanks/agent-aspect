@@ -224,6 +224,7 @@ impl AuditStore {
                     output_context_bytes INTEGER NOT NULL DEFAULT 0,
                     redaction_policy TEXT NOT NULL DEFAULT 'basic',
                     failure_class TEXT,
+                    fallback_provider TEXT,
                     created_at TEXT NOT NULL,
                     finished_at TEXT,
                     FOREIGN KEY (workflow_id) REFERENCES workflows(id)
@@ -253,6 +254,7 @@ impl AuditStore {
         self.migrate_v20_workflow_ha()?;
         self.migrate_v21_workflow_attempts()?;
         self.migrate_v22_workflow_attempt_deadline()?;
+        self.migrate_v23_workflow_fallback_provider()?;
         self.conn
             .execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_conv_agent ON events(conversation_id, agent)",
@@ -584,6 +586,7 @@ impl AuditStore {
                     output_context_bytes INTEGER NOT NULL DEFAULT 0,
                     redaction_policy TEXT NOT NULL DEFAULT 'basic',
                     failure_class TEXT,
+                    fallback_provider TEXT,
                     created_at TEXT NOT NULL,
                     finished_at TEXT,
                     FOREIGN KEY (workflow_id) REFERENCES workflows(id)
@@ -744,6 +747,21 @@ impl AuditStore {
             self.conn
                 .execute(
                     "ALTER TABLE workflow_step_attempts ADD COLUMN hard_deadline_at TEXT",
+                    [],
+                )
+                .map_err(AgentAspectError::MigrateConversationSchema)?;
+        }
+        Ok(())
+    }
+
+    /// v23: workflow step 增加 fallback provider。
+    ///
+    /// fallback 是显式、一次性的保守策略；只在 runner 判定可 fallback 时消费该字段。
+    fn migrate_v23_workflow_fallback_provider(&self) -> AgentAspectResult<()> {
+        if !self.column_exists("workflow_steps", "fallback_provider")? {
+            self.conn
+                .execute(
+                    "ALTER TABLE workflow_steps ADD COLUMN fallback_provider TEXT",
                     [],
                 )
                 .map_err(AgentAspectError::MigrateConversationSchema)?;

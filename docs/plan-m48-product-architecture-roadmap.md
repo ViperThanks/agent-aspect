@@ -5,7 +5,7 @@
 
 ## Status
 
-2026-05-10：
+2026-05-11：
 
 - M48 Mobile Control Plane Closure 第一版已完成：client token renew 使用 hash + generation CAS，旧 token 轮换后失效；mobile lease v2 以内存 lease 表达手机控制面活性；手机首页使用 `/mobile/summary` 聚合轻量摘要；hidden 状态停止重型轮询，visible / online / pageshow 恢复时补 beat、renew 和当前视图刷新；relay smoke 覆盖 renew、旧 token 拒绝、mobile summary 和 beat lease。
 - M48.5 Runtime HA Core 第一版已完成：JobRunner heartbeat 是活进程权威；scanner 只收 heartbeat stale 的 orphan job；fresh heartbeat 时 scanner 不写 job 终态；transcript no delta 先进入 maybe_idle，hard deadline + stale heartbeat 才经 CompletionSink 写 `scanner_timeout`；新增失败注入单测覆盖 fresh/stale heartbeat 和 no-delta idle。
@@ -15,7 +15,8 @@
 - M52 Orchestration HA 第一片已完成：workflow schema 增加 attempt/idempotency/retry/context/redaction 元数据；Bridge 启动恢复 stale running/paused workflow；step 下游上下文增加脱敏与 64KB 上限。
 - M52 Orchestration HA 第二片已完成：新增 `workflow_step_attempts` attempt 历史表；retry 不覆盖上一轮 job；workflow runner 按 retry_budget 自动重试非 cancelled 失败；状态/失败分类在 Rust 内部收口为 enum，DB/API 仍保持稳定字符串。
 - M52 Orchestration HA 第三片已完成：step attempt 写入 `hard_deadline_at`；workflow detail 批量返回 attempts；Bridge Workflows UI 展示 attempt/retry/deadline/context/failure；修复重新运行覆盖旧 attempt、cancel 后继续 retry、cancelled 被写成 failed、旧数据 attempts backfill。
-- 下一步：M52 剩余部分，范围限定为 fallback 策略与更细的 workflow UI 操作。
+- M52 Orchestration HA 第四片已完成：workflow step 支持显式 `fallback_provider`；runner 在 retry 耗尽后仅对 `timeout` / `process_failed` 消费一次 fallback；`submit_failed` / `cancelled` 不 fallback；Workflows UI 支持 retry budget 与 fallback provider 配置。
+- 下一步：M53 Softwareization，范围限定为 Doctor v2、diagnostic bundle、release smoke、Mac app shell 收口。
 
 ---
 

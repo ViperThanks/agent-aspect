@@ -29,6 +29,8 @@ pub struct ProviderCapabilities {
     pub supports_transcript: bool,
     /// 是否支持继续既有会话。
     pub supports_resume: bool,
+    /// 是否支持启动新会话。
+    pub supports_new: bool,
     /// 是否支持 provider 自带 timeout 控制。
     pub supports_native_timeout: bool,
 }
@@ -325,6 +327,7 @@ impl ProviderRegistry {
             supports_stop: c.supports_stop,
             supports_transcript: c.supports_transcript,
             supports_resume: c.supports_resume,
+            supports_new: c.supports_new,
             supports_native_timeout: c.supports_native_timeout,
         })
     }
@@ -334,6 +337,14 @@ impl ProviderRegistry {
         self.providers
             .get(provider)
             .map(|c| c.enabled && c.supports_resume)
+            .unwrap_or(false)
+    }
+
+    /// provider 是否可启动新任务（必须同时 enabled 且 supports_new）。
+    pub fn can_start_new(&self, provider: &str) -> bool {
+        self.providers
+            .get(provider)
+            .map(|c| c.enabled && c.supports_new)
             .unwrap_or(false)
     }
 
@@ -397,6 +408,7 @@ mod tests {
         assert!(claude.supports_stop);
         assert!(claude.supports_transcript);
         assert!(claude.supports_resume);
+        assert!(claude.supports_new);
         assert!(!claude.supports_native_timeout);
 
         let codex = r.capabilities("codex_cli").unwrap();
@@ -405,6 +417,9 @@ mod tests {
         assert!(codex.supports_stop);
         assert!(codex.supports_transcript);
         assert!(codex.supports_resume);
+        assert!(codex.supports_new);
+        assert!(r.can_start_new("codex_cli"));
+        assert!(!r.can_start_new("nonexistent"));
     }
 
     #[test]

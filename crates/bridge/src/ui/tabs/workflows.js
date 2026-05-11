@@ -8,7 +8,7 @@ const WFS = {
   editing: false,
   tplName: '',
   tplDesc: '',
-  steps: [{ provider: 'claude_code', project_path: '', prompt: '', context_strategy: 'none' }]
+  steps: [{ provider: 'claude_code', fallback_provider: '', retry_budget: 0, project_path: '', prompt: '', context_strategy: 'none' }]
 };
 
 const WF_TEMPLATES = [
@@ -82,6 +82,13 @@ function renderWfCreateForm() {
               '<option value="kimi_code"' + (s.provider === 'kimi_code' ? ' selected' : '') + '>Kimi Code</option>' +
               '<option value="codex_cli"' + (s.provider === 'codex_cli' ? ' selected' : '') + '>Codex CLI</option>' +
             '</select>' +
+            '<select class="select wf-step-fallback" data-idx="' + i + '" style="width:150px">' +
+              '<option value=""' + (!s.fallback_provider ? ' selected' : '') + '>无 fallback</option>' +
+              '<option value="claude_code"' + (s.fallback_provider === 'claude_code' ? ' selected' : '') + '>fallback Claude</option>' +
+              '<option value="kimi_code"' + (s.fallback_provider === 'kimi_code' ? ' selected' : '') + '>fallback Kimi</option>' +
+              '<option value="codex_cli"' + (s.fallback_provider === 'codex_cli' ? ' selected' : '') + '>fallback Codex</option>' +
+            '</select>' +
+            '<input class="input wf-step-retry" data-idx="' + i + '" type="number" min="0" max="5" placeholder="retry" value="' + esc(s.retry_budget || 0) + '" style="width:72px">' +
             '<select class="select wf-step-ctx" data-idx="' + i + '" style="width:140px">' +
               '<option value="none"' + (s.context_strategy === 'none' ? ' selected' : '') + '>无上下文</option>' +
               '<option value="last_50_lines"' + (s.context_strategy === 'last_50_lines' ? ' selected' : '') + '>最后 50 行</option>' +
@@ -141,7 +148,7 @@ function applyWfTemplate() {
 
 function addWfStep() {
   syncWfStepsFromDom();
-  WFS.steps.push({ provider: 'claude_code', project_path: '', prompt: '', context_strategy: 'none' });
+  WFS.steps.push({ provider: 'claude_code', fallback_provider: '', retry_budget: 0, project_path: '', prompt: '', context_strategy: 'none' });
   renderWfCreateForm();
 }
 
@@ -159,6 +166,14 @@ function syncWfStepsFromDom() {
   document.querySelectorAll('.wf-step-ctx').forEach(el => {
     const i = parseInt(el.dataset.idx);
     if (WFS.steps[i]) WFS.steps[i].context_strategy = el.value;
+  });
+  document.querySelectorAll('.wf-step-fallback').forEach(el => {
+    const i = parseInt(el.dataset.idx);
+    if (WFS.steps[i]) WFS.steps[i].fallback_provider = el.value;
+  });
+  document.querySelectorAll('.wf-step-retry').forEach(el => {
+    const i = parseInt(el.dataset.idx);
+    if (WFS.steps[i]) WFS.steps[i].retry_budget = Math.max(0, Math.min(5, parseInt(el.value || '0', 10) || 0));
   });
   document.querySelectorAll('.wf-step-project').forEach(el => {
     const i = parseInt(el.dataset.idx);
@@ -194,7 +209,7 @@ function submitCreateWf() {
       if (el) el.classList.add('hidden');
       WFS.tplName = '';
       WFS.tplDesc = '';
-      WFS.steps = [{ provider: 'claude_code', project_path: '', prompt: '', context_strategy: 'none' }];
+      WFS.steps = [{ provider: 'claude_code', fallback_provider: '', retry_budget: 0, project_path: '', prompt: '', context_strategy: 'none' }];
       loadWorkflowList();
       selectWorkflow(data.id);
     } else {
@@ -290,6 +305,7 @@ function renderWfDetail() {
     const providerLabel = AGENTS[s.provider] || s.provider || 'unknown';
     const attemptText = 'attempt ' + (s.attempt || 1) + '/' + (s.max_attempts || 1);
     const retryText = (s.retry_budget || 0) > 0 ? ' · retry ' + s.retry_budget : '';
+    const fallbackText = s.fallback_provider ? ' · fallback ' + (AGENTS[s.fallback_provider] || s.fallback_provider) : '';
     const deadlineText = s.hard_deadline_at ? ' · deadline ' + formatTime(s.hard_deadline_at) : '';
     const ctxText = ((s.input_context_bytes || 0) || (s.output_context_bytes || 0))
       ? ' · ctx ' + formatWfBytes(s.input_context_bytes || 0) + '/' + formatWfBytes(s.output_context_bytes || 0)
@@ -310,7 +326,7 @@ function renderWfDetail() {
         '</div>' +
         (s.project_path ? '<div class="wf-step-path">' + esc(s.project_path) + '</div>' : '') +
         '<div class="wf-step-prompt">' + esc(s.prompt) + '</div>' +
-        '<div class="wf-step-job">' + esc(attemptText + retryText + deadlineText) + ctxText + failureText + '</div>' +
+        '<div class="wf-step-job">' + esc(attemptText + retryText + fallbackText + deadlineText) + ctxText + failureText + '</div>' +
         attemptHistory +
         (s.job_id ? '<div class="wf-step-job">Job: ' + esc(s.job_id.substring(0, 8)) + '… <button class="btn btn-sm" style="font-size:.68rem;padding:1px 6px" onclick="toggleStepLogs(\'' + jsStr(s.id) + '\',\'' + jsStr(wf.id) + '\')">日志</button></div>' : '') +
         '<div id="step-logs-' + esc(s.id) + '"></div>' +

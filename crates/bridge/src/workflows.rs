@@ -11,7 +11,9 @@
 //! - context_strategy 控制日志截断：none / last_50_lines / last_100_lines / full_log
 
 use agent_aspect_core::audit::AuditStore;
+use agent_aspect_core::config::Config;
 use agent_aspect_core::error::AgentAspectError;
+use agent_aspect_core::provider_registry::ProviderRegistry;
 use agent_aspect_core::store::workflows::{
     WorkflowAttemptStatus, WorkflowFailureClass, WorkflowStepRow,
 };
@@ -293,6 +295,7 @@ fn execute_workflow_inner(
         .map_err(|e| ExecuteError::Db(e.to_string()))?
         .map(|wf| wf.advance_mode)
         .unwrap_or_else(|| "auto".to_string());
+    let provider_registry = ProviderRegistry::from_config(&Config::load_or_create());
 
     let mut previous_logs: Option<String> = None;
     // 记录每个 step_order 对应的日志，支持 context_from_step 按步索引读取
@@ -449,6 +452,40 @@ fn execute_workflow_inner(
                                         "attempt": current_step.attempt,
                                         "max_attempts": current_step.max_attempts,
                                         "hard_deadline_at": hard_deadline_at,
+                                    })
+                                    .to_string(),
+                                });
+                                continue;
+                            }
+                        }
+                        if should_fallback_step(&current_step, failure_class, &provider_registry) {
+                            let fallback_provider =
+                                current_step.fallback_provider.clone().unwrap_or_default();
+                            if store
+                                .prepare_workflow_step_fallback(
+                                    &current_step.id,
+                                    &fallback_provider,
+                                    &now,
+                                )
+                                .map_err(|e| ExecuteError::Db(e.to_string()))?
+                                .is_some()
+                            {
+                                current_step = store
+                                    .get_workflow_step(&current_step.id)
+                                    .map_err(|e| ExecuteError::Db(e.to_string()))?
+                                    .ok_or_else(|| {
+                                        ExecuteError::Db("workflow step not found".to_string())
+                                    })?;
+                                broadcaster.lock().unwrap().broadcast(crate::sse::SseEvent {
+                                    event_type: "workflow_step_status".to_string(),
+                                    data: serde_json::json!({
+                                        "workflow_id": workflow_id,
+                                        "step_id": current_step.id,
+                                        "step_order": current_step.step_order,
+                                        "status": "pending",
+                                        "attempt": current_step.attempt,
+                                        "max_attempts": current_step.max_attempts,
+                                        "fallback_provider": current_step.provider.clone(),
                                     })
                                     .to_string(),
                                 });
@@ -708,6 +745,34 @@ fn should_retry_step(step: &WorkflowStepRow, failure_class: WorkflowFailureClass
     failure_class != WorkflowFailureClass::Cancelled && step.attempt < step.max_attempts
 }
 
+/// 判定 step 是否可以消费一次 fallback provider。
+///
+/// 只允许 timeout/process_failed 触发 fallback；提交失败通常代表本地命令或配置错误，
+/// 自动换 provider 会掩盖根因，因此保持 fail-fast。
+fn should_fallback_step(
+    step: &WorkflowStepRow,
+    failure_class: WorkflowFailureClass,
+    registry: &ProviderRegistry,
+) -> bool {
+    if !matches!(
+        failure_class,
+        WorkflowFailureClass::Timeout | WorkflowFailureClass::ProcessFailed
+    ) {
+        return false;
+    }
+    if step.attempt < step.max_attempts {
+        return false;
+    }
+    let fallback = match step.fallback_provider.as_deref() {
+        Some(provider) if !provider.trim().is_empty() => provider,
+        _ => return false,
+    };
+    if Some(fallback) == step.provider.as_deref() {
+        return false;
+    }
+    registry.can_start_new(fallback)
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // HTTP Handlers
 // ═══════════════════════════════════════════════════════════════════
@@ -749,6 +814,7 @@ pub fn handle_post_workflows(
 
     // 先校验所有 steps，再插入 DB，避免校验失败留下孤儿 workflow 记录
     let valid_strategies = ["none", "last_50_lines", "last_100_lines", "full_log"];
+    let provider_registry = ProviderRegistry::from_config(&Config::load_or_create());
     for (i, step_val) in steps.iter().enumerate() {
         let prompt = step_val
             .get("prompt")
@@ -796,6 +862,39 @@ pub fn handle_post_workflows(
                 );
             }
         }
+        let provider = step_val
+            .get("provider")
+            .and_then(|v| v.as_str())
+            .unwrap_or("claude_code");
+        if !provider_registry.can_start_new(provider) {
+            return json_response(
+                400,
+                &serde_json::json!({
+                    "error": format!("step {} provider '{}' is not enabled for new jobs", i, provider)
+                }),
+            );
+        }
+        if let Some(fallback_provider) = step_val.get("fallback_provider").and_then(|v| v.as_str())
+        {
+            if !fallback_provider.trim().is_empty() {
+                if fallback_provider == provider {
+                    return json_response(
+                        400,
+                        &serde_json::json!({
+                            "error": format!("step {} fallback_provider must differ from provider", i)
+                        }),
+                    );
+                }
+                if !provider_registry.can_start_new(fallback_provider) {
+                    return json_response(
+                        400,
+                        &serde_json::json!({
+                            "error": format!("step {} fallback_provider '{}' is not enabled for new jobs", i, fallback_provider)
+                        }),
+                    );
+                }
+            }
+        }
     }
 
     let store = ctx.store.lock().unwrap();
@@ -831,6 +930,10 @@ pub fn handle_post_workflows(
             .get("redaction_policy")
             .and_then(|v| v.as_str())
             .unwrap_or("basic");
+        let fallback_provider = step_val
+            .get("fallback_provider")
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.trim().is_empty());
 
         if let Err(e) = store.insert_workflow_step_with_ha(
             &step_id,
@@ -844,6 +947,7 @@ pub fn handle_post_workflows(
             context_from_step,
             retry_budget,
             redaction_policy,
+            fallback_provider,
             &now,
         ) {
             return json_response(500, &serde_json::json!({"error": e.to_string()}));
@@ -993,6 +1097,7 @@ pub fn handle_get_workflow(
                 "output_context_bytes": s.output_context_bytes,
                 "redaction_policy": s.redaction_policy,
                 "failure_class": s.failure_class,
+                "fallback_provider": s.fallback_provider,
                 "attempts": attempts,
             })
         })
