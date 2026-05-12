@@ -1,6 +1,7 @@
 /* conversations.js — Conversations tab */
 
 const CONV_LIST_LIMIT = 500;
+const CONV_GROUP_COLLAPSED_LIMIT = 5;
 
 /* Clear browser text selection to prevent blue residue on navigation */
 function clearTextSelection() {
@@ -67,16 +68,15 @@ function renderConvList(convs) {
     if (!groups[p]) groups[p] = [];
     groups[p].push(c);
   });
-  // Sort groups by max last_seen_at desc
+  // Project groups are sorted by visible project name so the sidebar stays predictable.
   const groupEntries = Object.entries(groups).sort((a, b) => {
-    const selectedA = a[1].some(c => c.id === S.conv.detailCid);
-    const selectedB = b[1].some(c => c.id === S.conv.detailCid);
-    if (selectedA !== selectedB) return selectedA ? -1 : 1;
-    const maxA = Math.max(...a[1].map(c => new Date(c.last_seen_at || 0).getTime()));
-    const maxB = Math.max(...b[1].map(c => new Date(c.last_seen_at || 0).getTime()));
-    return maxB - maxA;
+    const an = projectBasename(a[0] || '').toLowerCase();
+    const bn = projectBasename(b[0] || '').toLowerCase();
+    if (an !== bn) return an.localeCompare(bn);
+    return String(a[0] || '').localeCompare(String(b[0] || ''));
   });
   let html = '';
+  S.conv.projectExpanded = S.conv.projectExpanded || {};
   groupEntries.forEach(([path, listConvs]) => {
     listConvs.sort((a, b) => {
       if (a.id === S.conv.detailCid) return -1;
@@ -84,15 +84,31 @@ function renderConvList(convs) {
       return new Date(b.last_seen_at || 0).getTime() - new Date(a.last_seen_at || 0).getTime();
     });
     const agent = S.conv.agentFilter || (listConvs[0] && listConvs[0].agent) || 'claude_code';
+    const expanded = !!S.conv.projectExpanded[path];
+    const visibleConvs = expanded ? listConvs : listConvs.slice(0, CONV_GROUP_COLLAPSED_LIMIT);
+    const hiddenCount = Math.max(0, listConvs.length - visibleConvs.length);
+    const moreLess = listConvs.length > CONV_GROUP_COLLAPSED_LIMIT
+      ? '<button class="conv-project-toggle" onclick="event.stopPropagation();toggleConvProjectGroup(\'' + jsStr(path) + '\')">' +
+          (expanded ? 'less' : 'more ' + hiddenCount) +
+        '</button>'
+      : '';
     html += '<div class="conv-project-head">' +
       '<span class="conv-project-title">' + esc(projectBasename(path)) + '</span>' +
+      '<span class="conv-project-count">' + listConvs.length + '</span>' +
+      moreLess +
       '<button class="conv-project-new" onclick="event.stopPropagation();startNewConversationFromProject(\'' + jsStr(agent) + '\',\'' + jsStr(path) + '\')" title="在 ' + esc(projectBasename(path)) + ' 新建会话" aria-label="新建会话">' +
         '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>' +
       '</button>' +
       '</div>';
-    listConvs.forEach(c => html += buildConvCardHTML(c));
+    visibleConvs.forEach(c => html += buildConvCardHTML(c));
   });
   list.innerHTML = html;
+}
+
+function toggleConvProjectGroup(path) {
+  S.conv.projectExpanded = S.conv.projectExpanded || {};
+  S.conv.projectExpanded[path] = !S.conv.projectExpanded[path];
+  loadConvList();
 }
 
 function syncConvDetailSelection(convs) {
@@ -936,35 +952,7 @@ function loadOlderMessages() {
     _showChatLoading(false);
     if (r.error || !r.messages || !r.messages.length) return;
     S.conv.chatOffset += r.messages.length;
-    const currentTopTimeEl = msgsEl.querySelector('.chat-msg .chat-time');
-    const currentTopTime = currentTopTimeEl ? currentTopTimeEl.textContent : '';
-    let html = '<div class="chat-scroll-sentinel" id="chat-scroll-sentinel"></div>';
-    let tsState = { last: '' };
-    r.messages.forEach((m, idx) => {
-      const tsRaw = m.timestamp ? formatMsgTime(m.timestamp) : '';
-      const isBoundary = idx === r.messages.length - 1;
-      const showTs = tsRaw && tsRaw !== tsState.last && !(isBoundary && tsRaw === currentTopTime);
-      if (showTs) tsState.last = tsRaw;
-      const ts = showTs ? '<span class="chat-time">' + esc(tsRaw) + '</span>' : '';
-      if (m.role === 'user') {
-        html += '<div class="chat-row chat-row-user"><div class="chat-msg chat-user"><div class="chat-role-row"><span class="chat-role">你</span>' + ts + '</div><div class="chat-text md-render">' + renderMd(m.text) + '</div></div></div>';
-      } else if (m.role === 'assistant') {
-        const t = m.thinking ? { thinking: m.thinking, content: m.text || '' } : extractThinking(m.text);
-        const messageId = m.seq || idx || Math.random().toString(36).slice(2, 8);
-        const thinkingHtml = buildThinkingHtml(t.thinking, 'older-' + messageId);
-        const contentHtml = t.content ? '<div class="chat-text md-render">' + renderMd(t.content) + '</div>' : '';
-        html += '<div class="chat-row chat-row-assistant"><div class="chat-msg chat-assistant"><div class="chat-role-row"><span class="chat-role">助手</span>' + ts + '</div>' + thinkingHtml + contentHtml + '</div></div>';
-      } else if (m.role === 'tool_summary') {
-        const hasFull = m.tool_input_full && m.tool_input_full !== m.tool_input_preview;
-        html += '<div class="chat-row chat-row-tool"><div class="chat-msg chat-tool"><div class="chat-tool-line">' +
-          '<span class="chat-tool-name">' + esc(m.tool_name || 'tool') + '</span>' +
-          (m.tool_input_preview ? '<span class="chat-tool-summary"' +
-            (hasFull ? ' data-full="' + esc(m.tool_input_full) + '" data-preview="' + esc(m.tool_input_preview) + '" onclick="toggleToolSummary(this)" title="点击展开"' : '') +
-            '>' + esc(m.tool_input_preview) + '</span>' : '') +
-          ts +
-          '</div></div></div>';
-      }
-    });
+    let html = '<div class="chat-scroll-sentinel" id="chat-scroll-sentinel"></div>' + buildActivityHtml(r.messages);
     const oldSentinel = document.getElementById('chat-scroll-sentinel');
     if (oldSentinel) oldSentinel.remove();
     msgsEl.insertAdjacentHTML('afterbegin', html);
