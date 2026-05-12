@@ -141,6 +141,7 @@ function buildConvCardHTML(c) {
   const resumeBadge = c.can_resume === false
     ? '<span class="resume-badge resume-view">仅查看</span>'
     : '<span class="resume-badge resume-ok">可继续</span>';
+  const fullAccessBadge = conversationFullAccessBadge(c);
   // Runtime health badge
   var healthBadge = '';
   if (c.runtime_health && c.runtime_health.status !== 'unknown') {
@@ -159,13 +160,19 @@ function buildConvCardHTML(c) {
     : '';
   return '<div class="conv-card" data-cid="' + esc(c.id) + '" onclick="openConvDetail(\'' + jsStr(c.id) + '\')">' +
     '<div class="conv-card-top"><span class="conv-card-title">' + esc(c.title || '未命名') + src + '</span>' +
-    '<span class="badge-agent">' + esc(AGENTS[c.agent] || c.agent) + '</span>' + resumeBadge + runningBadge + healthBadge + '</div>' +
+    '<span class="badge-agent">' + esc(AGENTS[c.agent] || c.agent) + '</span>' + resumeBadge + fullAccessBadge + runningBadge + healthBadge + '</div>' +
     '<div class="card-meta"><span>' + esc(projectBasename(c.project_path)) + '</span>' +
     '<span class="conv-id-short" title="' + esc(c.conversation_id || '') + '">' + shortId(c.conversation_id) + '</span>' +
     copyButton(c.conversation_id || '', 'ID') +
     '<span>活跃 ' + ago(c.last_seen_at) + '</span>' +
     tokens + size + '</div>' +
     '<div class="conv-card-stats">' + counts + '</div></div>';
+}
+
+function conversationFullAccessBadge(c) {
+  var mode = c && c.runtime_health && c.runtime_health.permission_mode;
+  var fullAccess = c && (c.supports_permission_passthrough || permissionModeLabel(mode) === 'Full Access');
+  return fullAccess ? '<span class="resume-badge resume-ok">Full Access</span>' : '';
 }
 
 function updateConvPager() {
@@ -260,6 +267,7 @@ function loadConvDetail() {
         '<div class="conv-detail-meta">' +
         '<span class="badge-agent">' + esc(AGENTS[c.agent] || c.agent) + '</span>' +
         (c.can_resume === false ? '<span class="resume-badge resume-view">仅查看</span>' : '<span class="resume-badge resume-ok">可继续</span>') +
+        conversationFullAccessBadge(c) +
         '<span>' + esc(projectBasename(c.project_path)) + '</span>' +
         copyButton(c.conversation_id || '', '对话ID') +
         '</div>' +

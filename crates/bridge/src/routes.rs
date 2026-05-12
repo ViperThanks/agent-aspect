@@ -1618,6 +1618,10 @@ fn conversation_to_json_with_counts(
             Some("This provider does not support resume.".to_string()),
         )
     };
+    let supports_permission_passthrough = registry
+        .get(&c.agent)
+        .map(|provider| provider.supports_permission_passthrough)
+        .unwrap_or(false);
 
     // Runtime health status: 从 resume_cost_mode 或 identity 字段推断
     let runtime_health = if c.identity_version == 0 && c.model_id == "unknown" {
@@ -1652,6 +1656,7 @@ fn conversation_to_json_with_counts(
         "agent": c.agent,
         "conversation_id": c.conversation_id,
         "can_resume": can_resume,
+        "supports_permission_passthrough": supports_permission_passthrough,
         "resume_source": resume_source,
         "resume_id": resume_id,
         "resume_note": resume_note,
