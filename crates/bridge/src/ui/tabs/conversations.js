@@ -69,10 +69,12 @@ function renderConvList(convs) {
     groups[p].push(c);
   });
   // Project groups are sorted by visible project name so the sidebar stays predictable.
+  // Non-project buckets such as "/" or "未分类" are pushed behind real project names.
   const groupEntries = Object.entries(groups).sort((a, b) => {
-    const an = projectBasename(a[0] || '').toLowerCase();
-    const bn = projectBasename(b[0] || '').toLowerCase();
-    if (an !== bn) return an.localeCompare(bn);
+    const ak = projectGroupSortKey(a[0]);
+    const bk = projectGroupSortKey(b[0]);
+    if (ak.placeholder !== bk.placeholder) return ak.placeholder ? 1 : -1;
+    if (ak.name !== bk.name) return ak.name.localeCompare(bk.name, undefined, { numeric: true, sensitivity: 'base' });
     return String(a[0] || '').localeCompare(String(b[0] || ''));
   });
   let html = '';
@@ -103,6 +105,15 @@ function renderConvList(convs) {
     visibleConvs.forEach(c => html += buildConvCardHTML(c));
   });
   list.innerHTML = html;
+}
+
+function projectGroupSortKey(path) {
+  const name = projectBasename(path || '').trim();
+  const normalized = name.toLowerCase();
+  return {
+    name: normalized,
+    placeholder: !normalized || normalized === '/' || normalized === '未分类',
+  };
 }
 
 function toggleConvProjectGroup(path) {
